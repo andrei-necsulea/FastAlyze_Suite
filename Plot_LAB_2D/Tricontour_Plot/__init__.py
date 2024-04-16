@@ -1,0 +1,1 @@
+from Tricontour_Plot import tricontour_plot_graph_properties_aftercsv , tricontour_plot_graph_properties_afterexcel
