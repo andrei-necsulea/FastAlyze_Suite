@@ -1,0 +1,1 @@
+from Triplot_Plot import triplot_plot_graph_properties_aftercsv , triplot_plot_graph_properties_afterexcel
