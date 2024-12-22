@@ -1,0 +1,1 @@
+from Tripcolor_Plot import tripcolor_plot_graph_properties_aftercsv , tripcolor_plot_graph_properties_afterexcel
