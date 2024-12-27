@@ -21,8 +21,6 @@ class ComplexPlotApp:
         self.current_chart_title = "Advanced Plot"
         self.current_show_gridlines = False
         self.current_legend_position = 1
-        
-
 
         # Data Placeholder
         self.data = pd.DataFrame({'X': [1, 2, 3, 4], 'Y': [10, 20, 25, 30], 'Category': ['A', 'B', 'A', 'B']})
@@ -43,7 +41,6 @@ class ComplexPlotApp:
         # Tabs
         self.create_plot_tab()
         self.create_axis_range_tab()
-        self.enable_tooltip_deletion()
         self.create_chart_properties_tab()
         self.create_subplot_properties_tab()
         self.create_data_management_tab()
@@ -242,6 +239,9 @@ class ComplexPlotApp:
      self.canvas_widget = self.canvas.get_tk_widget()
      self.canvas_widget.pack(fill="both", expand=True)
 
+     # Initialize tooltips and right-click menu
+     self.enable_tooltip_deletion()
+
      # Initial Plot
      self.points = [(1, 10), (2, 20), (3, 25), (4, 30)] # Initialize with some points
      self.update_plot()
@@ -427,22 +427,33 @@ class ComplexPlotApp:
 
 
     def on_click(self, event):
-     """Handle mouse click events for selecting or adding points."""
-
+     """Handle mouse clicks to select a point for editing."""
      if event.inaxes != self.ax:
-        return
+        return  # Ignore clicks outside the plot
 
+     # Reset the appearance of the previously selected point
+     if hasattr(self, "selected_point_artist") and self.selected_point_artist:
+        self.selected_point_artist.remove()
+        self.selected_point_artist = None
+
+     # Find the closest point to the clicked location
+     self.selected_point = None
      for i, (x, y) in enumerate(self.points):
-        if abs(x - event.xdata) < 0.5 and abs(y - event.ydata) < 0.5:  # Check proximity to a point
+        if abs(x - event.xdata) < 0.5 and abs(y - event.ydata) < 0.5:  # Adjust threshold as needed
             self.selected_point = i
-            return  # Exit after finding the first matching point
 
-     # If no point is close, add a new point at the clicked location
-     self.points.append((event.xdata, event.ydata))
+            # Highlight the selected point with a red border
+            self.selected_point_artist = self.ax.scatter(
+                [x], [y], s=200, edgecolor="red", facecolor="none", linewidth=2, zorder=5
+            )
+            self.canvas.draw_idle()
 
-     self.apply_chart_properties()
+            # Notify the user of the selection
+            print(f"Point ({x}, {y}) selected.")
+            return
 
-     self.update_plot()
+     # If no point is close enough, clear the selection
+     print("No point close enough to select.")
 
     
     def handle_mouse_events(self, event):
@@ -526,32 +537,32 @@ class ComplexPlotApp:
         messagebox.showinfo("Info", "No point selected for editing!")
         return
 
+     # Create a dialog to edit the point
      def save_edit():
         try:
             new_x = float(x_entry.get())
             new_y = float(y_entry.get())
             self.points[self.selected_point] = (new_x, new_y)
-            self.apply_chart_properties()
             self.update_plot()
             edit_window.destroy()
         except ValueError:
             messagebox.showerror("Error", "Invalid input! Please enter numeric values.")
 
-     # Create a new window for editing
      edit_window = tk.Toplevel(self.root)
      edit_window.title("Edit Point")
 
      ttk.Label(edit_window, text="X:").grid(row=0, column=0, padx=5, pady=5)
      x_entry = ttk.Entry(edit_window)
-     x_entry.insert(0, self.points[self.selected_point][0])  # Pre-fill with current X value
+     x_entry.insert(0, str(self.points[self.selected_point][0]))
      x_entry.grid(row=0, column=1, padx=5, pady=5)
 
      ttk.Label(edit_window, text="Y:").grid(row=1, column=0, padx=5, pady=5)
      y_entry = ttk.Entry(edit_window)
-     y_entry.insert(0, self.points[self.selected_point][1])  # Pre-fill with current Y value
+     y_entry.insert(0, str(self.points[self.selected_point][1]))
      y_entry.grid(row=1, column=1, padx=5, pady=5)
 
      ttk.Button(edit_window, text="Save", command=save_edit).grid(row=2, column=0, columnspan=2, pady=10)
+
 
 
 
@@ -675,22 +686,33 @@ class ComplexPlotApp:
 
     
     def enable_tooltip_deletion(self):
-      """Enable a right-click context menu to delete tooltips."""
-      self.context_menu = tk.Menu(self.canvas.get_tk_widget(), tearoff=0)
-      self.context_menu.add_command(label="Delete Tooltip", command=self.delete_tooltip)
+     """Enable a right-click context menu to delete tooltips."""
+     self.context_menu = tk.Menu(self.canvas.get_tk_widget(), tearoff=0)
+     self.context_menu.add_command(label="Delete Tooltip", command=self.delete_tooltip)
     
-      def on_right_click(event):
-        if self.tooltip:
+     def on_right_click(event):
+        # Open menu if there is any tooltip (hover or persistent)
+        if self.tooltip or self.annotations:
             self.context_menu.tk_popup(event.x_root, event.y_root)
-    
-      self.canvas.get_tk_widget().bind("<Button-3>", on_right_click)
+
+     self.canvas.get_tk_widget().bind("<Button-3>", on_right_click)
+
 
     def delete_tooltip(self):
-      """Delete the currently visible tooltip."""
-      if self.tooltip:
-        self.tooltip.remove()
+     """Delete the currently visible or persistent tooltip."""
+     # Remove hover tooltip
+     if self.tooltip:
+        self.tooltip.set_visible(False)  # Hide hover tooltip
         self.tooltip = None
-        self.canvas.draw_idle()
+
+     # Remove persistent annotations
+     if self.annotations:
+        for annotation in self.annotations:
+            annotation.remove()  # Remove each annotation
+        self.annotations = []  # Clear the list of annotations
+
+     self.canvas.draw_idle()  # Redraw the canvas to reflect changes
+
 
 
     def zoom_in(self):
