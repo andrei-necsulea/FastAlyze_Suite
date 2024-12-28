@@ -427,49 +427,60 @@ class ComplexPlotApp:
 
 
     def on_click(self, event):
-     """Handle mouse clicks to select a point for editing."""
+     """Handle mouse left-click to select and permanently highlight a point."""
      if event.inaxes != self.ax:
         return  # Ignore clicks outside the plot
 
-     # Reset the appearance of the previously selected point
+     # Convert the event's screen coordinates to Matplotlib data coordinates
+     x_data, y_data = event.xdata, event.ydata
+
+     # Clear the previous selection highlight
      if hasattr(self, "selected_point_artist") and self.selected_point_artist:
-        self.selected_point_artist.remove()
+        self.selected_point_artist.set_visible(False)
         self.selected_point_artist = None
 
-     # Find the closest point to the clicked location
-     self.selected_point = None
-     for i, (x, y) in enumerate(self.points):
-        if abs(x - event.xdata) < 0.5 and abs(y - event.ydata) < 0.5:  # Adjust threshold as needed
-            self.selected_point = i
+     # Check if clicking near a specific annotation
+     self.selected_annotation = None
+     if self.annotations:
+        for annotation in self.annotations:
+            x, y = annotation.xy
+            if (abs(x_data - x) < 0.2 or abs(y_data - y) < 0.2) or (abs(x_data - x) < 0.2 and abs(y_data - y) < 0.2):
+                self.selected_annotation = annotation
 
-            # Highlight the selected point with a red border
-            self.selected_point_artist = self.ax.scatter(
-                [x], [y], s=200, edgecolor="red", facecolor="none", linewidth=2, zorder=5
-            )
-            self.canvas.draw_idle()
-
-            # Notify the user of the selection
-            print(f"Point ({x}, {y}) selected.")
-            return
-
-     # If no point is close enough, clear the selection
-     print("No point close enough to select.")
+                # Permanently highlight the selected annotation
+                self.selected_point_artist = self.ax.scatter(
+                    [x], [y], s=200, edgecolor="red", facecolor="none", linewidth=2, zorder=5
+                )
+                self.canvas.draw_idle()  # Redraw the canvas to reflect changes
+                break
 
     
     def handle_mouse_events(self, event):
-        """Handle mouse events including single and double clicks."""
-        if event.dblclick:
-            self.on_double_click(event)
-        else:
-            self.on_click(event)
+     """Handle mouse events including single and double clicks."""
+     if event.dblclick:
+        self.on_double_click(event)
+     elif event.button == 1:  # Left-click
+        self.on_click(event)
+     elif event.button == 3:  # Right-click
+        self.enable_tooltip_deletion()
+
 
 
     def on_release(self, event):
      """Handle mouse button release to stop dragging."""
      if self.selected_point is not None:
-        self.selected_point = None  # Stop dragging
+        # Finalize the position of the dragged point
+        new_x, new_y = self.points[self.selected_point]
 
-     self.apply_chart_properties()   
+        # Update the annotation for the selected point
+        annotation = self.annotations[self.selected_point]
+        annotation.xy = (new_x, new_y)
+        annotation.set_position((new_x + 10, new_y + 10))  # Offset for better visibility
+
+        # Clear the selected point
+        self.selected_point = None
+
+     self.apply_chart_properties()
      self.update_plot()
 
 
@@ -477,7 +488,7 @@ class ComplexPlotApp:
         """Handle double-click events to persist a label above or below a point."""
         if event.inaxes == self.ax:
             for x, y in self.points:
-                if abs(event.xdata - x) < 0.2 and abs(event.ydata - y) < 0.2:
+                if (abs(event.xdata - x) < 0.2 or abs(event.ydata - y) < 0.2) or (abs(event.xdata - x) < 0.2 and abs(event.ydata - y) < 0.2):
                     # Determine the offset for the label placement
                     offset = 15 if event.ydata < y else -15
                     annotation = self.ax.annotate(
@@ -497,14 +508,22 @@ class ComplexPlotApp:
 
     def on_hover(self, event):
      """Handle mouse hover events for dragging points."""
-     if event.inaxes != self.ax and self.selected_point is not None:
+     if event.inaxes != self.ax or self.selected_point is None:
         return
 
      # Update the position of the selected point
      if self.selected_point is not None:
-        self.points[self.selected_point] = (event.xdata, event.ydata)
+        new_x, new_y = event.xdata, event.ydata
+        self.points[self.selected_point] = (new_x, new_y)
+
+        # Update the annotation and redraw it
+        annotation = self.annotations[self.selected_point]
+        annotation.xy = (new_x, new_y)
+        annotation.set_position((new_x + 10, new_y + 10))  # Offset for better visibility
+
         self.apply_chart_properties()
         self.update_plot()
+
 
 
 
@@ -656,15 +675,14 @@ class ComplexPlotApp:
     def show_tooltip(self, event):
         """Display a tooltip with point coordinates when hovering over points."""
         if event.inaxes != self.ax:
-            if self.tooltip:
+            if self.annotations:
                 self.tooltip.set_visible(False)
-                self.tooltip = None
                 self.canvas.draw_idle()
             return
 
         for x, y in self.points:
             if abs(event.xdata - x) < 0.2 and abs(event.ydata - y) < 0.2:
-                if self.tooltip:
+                if self.annotations:
                     self.tooltip.set_visible(False)
                 self.tooltip = self.ax.annotate(
                     f"({x:.2f}, {y:.2f})",
@@ -677,9 +695,8 @@ class ComplexPlotApp:
                 self.canvas.draw_idle()
                 return
 
-        if self.tooltip:
+        if self.annotations:
             self.tooltip.set_visible(False)
-            self.tooltip = None
             self.canvas.draw_idle()
 
         self.update_plot()
@@ -691,27 +708,26 @@ class ComplexPlotApp:
      self.context_menu.add_command(label="Delete Tooltip", command=self.delete_tooltip)
     
      def on_right_click(event):
-        # Open menu if there is any tooltip (hover or persistent)
-        if self.tooltip or self.annotations:
-            self.context_menu.tk_popup(event.x_root, event.y_root)
+        self.context_menu.tk_popup(event.x_root, event.y_root)
 
      self.canvas.get_tk_widget().bind("<Button-3>", on_right_click)
 
 
     def delete_tooltip(self):
-     """Delete the currently visible or persistent tooltip."""
-     # Remove hover tooltip
-     if self.tooltip:
-        self.tooltip.set_visible(False)  # Hide hover tooltip
-        self.tooltip = None
+     current_index = -1
 
-     # Remove persistent annotations
-     if self.annotations:
+     if self.annotations :
+       
+       self.tooltip.set_visible(False)
+       x_t , y_t = self.tooltip.xy
+
+       if self.annotations is not []:
         for annotation in self.annotations:
-            annotation.remove()  # Remove each annotation
-        self.annotations = []  # Clear the list of annotations
-
-     self.canvas.draw_idle()  # Redraw the canvas to reflect changes
+            x, y = annotation.xy
+            if x_t == x and y_t == y :
+                current_index = self.annotations.index(annotation)
+                self.annotations.remove(self.annotations[current_index])
+                self.canvas.draw_idle()
 
 
 
