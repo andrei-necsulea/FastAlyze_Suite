@@ -427,42 +427,41 @@ class ComplexPlotApp:
 
 
     def on_click(self, event):
-     """Handle mouse left-click to select and permanently highlight a point."""
+     """Handle single left-click to select points (but NOT create tooltips)."""
      if event.inaxes != self.ax:
         return  # Ignore clicks outside the plot
 
-     # Convert the event's screen coordinates to Matplotlib data coordinates
-     x_data, y_data = event.xdata, event.ydata
+     self.last_click_coords = (event.xdata, event.ydata)  # Track last click
 
-     # Clear the previous selection highlight
-     if hasattr(self, "selected_point_artist") and self.selected_point_artist:
-        self.selected_point_artist.set_visible(False)
-        self.selected_point_artist = None
-
-     # Check if clicking near a specific annotation
+     # Ensure this function does NOT create tooltips
      self.selected_annotation = None
      if self.annotations:
         for annotation in self.annotations:
             x, y = annotation.xy
-            if (abs(x_data - x) < 0.2 or abs(y_data - y) < 0.2) or (abs(x_data - x) < 0.2 and abs(y_data - y) < 0.2):
+            if abs(event.xdata - x) < 0.2 and abs(event.ydata - y) < 0.2:
                 self.selected_annotation = annotation
-
-                # Permanently highlight the selected annotation
-                self.selected_point_artist = self.ax.scatter(
-                    [x], [y], s=200, edgecolor="red", facecolor="none", linewidth=2, zorder=5
-                )
-                self.canvas.draw_idle()  # Redraw the canvas to reflect changes
                 break
+
+     self.canvas.draw_idle()
+
+
+
 
     
     def handle_mouse_events(self, event):
-     """Handle mouse events including single and double clicks."""
-     if event.dblclick:
+     """Ensure tooltips are created ONLY on double-clicks."""
+     print(f"handle_mouse_events triggered: event.button = {event.button}, event.dblclick = {event.dblclick}")
+
+     if event.dblclick:  # This ensures ONLY double-click creates tooltips
+        print("Double-click detected, calling on_double_click()")
         self.on_double_click(event)
-     elif event.button == 1:  # Left-click
+     elif event.button == 1:  # Left-click should NOT create tooltips
+        print("Single left-click detected, calling on_click()")
         self.on_click(event)
-     elif event.button == 3:  # Right-click
+     elif event.button == 3:  # Right-click for tooltip deletion
+        print("Right-click detected, calling enable_tooltip_deletion()")
         self.enable_tooltip_deletion()
+
 
 
 
@@ -485,24 +484,35 @@ class ComplexPlotApp:
 
 
     def on_double_click(self, event):
-        """Handle double-click events to persist a label above or below a point."""
-        if event.inaxes == self.ax:
-            for x, y in self.points:
-                if (abs(event.xdata - x) < 0.2 or abs(event.ydata - y) < 0.2) or (abs(event.xdata - x) < 0.2 and abs(event.ydata - y) < 0.2):
-                    # Determine the offset for the label placement
-                    offset = 15 if event.ydata < y else -15
-                    annotation = self.ax.annotate(
-                        f"({x:.2f}, {y:.2f})",
-                        xy=(x, y),
-                        xytext=(0, offset),  # Dynamically place above or below
-                        textcoords="offset points",
-                        ha='center',
-                        bbox=dict(boxstyle="round,pad=0.3", edgecolor="black", facecolor="white"),
-                        fontsize=9
-                    )
-                    self.annotations.append(annotation)
-                    self.canvas.draw_idle()
-                    return
+     """Handle double-click events to persist a label above or below a point."""
+     if event.inaxes != self.ax:
+        return
+
+     # Check if an annotation already exists at this location
+     for annotation in self.annotations:
+        x, y = annotation.xy
+        if abs(event.xdata - x) < 0.2 and abs(event.ydata - y) < 0.2:
+            print("Annotation already exists at this point.")
+            return  # Don't add duplicate annotations
+
+     # Default behavior if no existing annotation is found
+     x_new, y_new = event.xdata, event.ydata  # Use event values directly
+     offset = 15 if y_new < self.ax.get_ylim()[1] / 2 else -15  # Adjust placement
+
+     annotation = self.ax.annotate(
+        f"({x_new:.2f}, {y_new:.2f})",
+        xy=(x_new, y_new),
+        xytext=(0, offset),
+        textcoords="offset points",
+        ha='center',
+        bbox=dict(boxstyle="round,pad=0.3", edgecolor="black", facecolor="white"),
+        fontsize=9
+     )
+    
+     self.annotations.append(annotation)
+     self.canvas.draw_idle()
+
+
 
 
 
@@ -512,17 +522,20 @@ class ComplexPlotApp:
         return
 
      # Update the position of the selected point
-     if self.selected_point is not None:
-        new_x, new_y = event.xdata, event.ydata
-        self.points[self.selected_point] = (new_x, new_y)
+     new_x, new_y = event.xdata, event.ydata
+     self.points[self.selected_point] = (new_x, new_y)
 
-        # Update the annotation and redraw it
-        annotation = self.annotations[self.selected_point]
-        annotation.xy = (new_x, new_y)
-        annotation.set_position((new_x + 10, new_y + 10))  # Offset for better visibility
+     # Ensure annotation moves with the point
+     for annotation in self.annotations:
+        x, y = annotation.xy
+        if abs(x - new_x) < 0.2 and abs(y - new_y) < 0.2:
+            annotation.xy = (new_x, new_y)
+            annotation.set_position((new_x + 10, new_y + 10))  # Offset for better visibility
+            break
 
-        self.apply_chart_properties()
-        self.update_plot()
+     self.apply_chart_properties()
+     self.update_plot()
+
 
 
 
@@ -673,33 +686,39 @@ class ComplexPlotApp:
 
     
     def show_tooltip(self, event):
-        """Display a tooltip with point coordinates when hovering over points."""
-        if event.inaxes != self.ax:
-            if self.annotations:
-                self.tooltip.set_visible(False)
-                self.canvas.draw_idle()
+     """Display tooltip ONLY on hover, NOT on clicks."""
+     if event.inaxes != self.ax:
+        return  # Ignore if outside the plot
+
+     # Debug: Print when show_tooltip is triggered
+     print(f"show_tooltip triggered: event.button = {event.button}")
+
+     if event.button is not None:  
+        print("Blocked tooltip creation because it was a click event.")
+        return  # Ensures tooltips ONLY appear on hover
+
+     for x, y in self.points:
+        if abs(event.xdata - x) < 0.2 and abs(event.ydata - y) < 0.2:
+            print(f"Tooltip added at: ({x}, {y})")
+            if self.tooltip:
+                self.tooltip.set_visible(False)  # Hide previous tooltip before adding a new one
+            self.tooltip = self.ax.annotate(
+                f"({x:.2f}, {y:.2f})",
+                xy=(x, y),
+                xytext=(10, 10),
+                textcoords="offset points",
+                bbox=dict(boxstyle="round,pad=0.3", edgecolor="black", facecolor="white"),
+                fontsize=9
+            )
+            self.canvas.draw_idle()
             return
 
-        for x, y in self.points:
-            if abs(event.xdata - x) < 0.2 and abs(event.ydata - y) < 0.2:
-                if self.annotations:
-                    self.tooltip.set_visible(False)
-                self.tooltip = self.ax.annotate(
-                    f"({x:.2f}, {y:.2f})",
-                    xy=(x, y),
-                    xytext=(10, 10),
-                    textcoords="offset points",
-                    bbox=dict(boxstyle="round,pad=0.3", edgecolor="black", facecolor="white"),
-                    fontsize=9
-                )
-                self.canvas.draw_idle()
-                return
+     # Hide tooltip if no match
+     if self.tooltip:
+        print("Hiding tooltip")
+        self.tooltip.set_visible(False)
+        self.canvas.draw_idle()
 
-        if self.annotations:
-            self.tooltip.set_visible(False)
-            self.canvas.draw_idle()
-
-        self.update_plot()
 
     
     def enable_tooltip_deletion(self):
@@ -714,20 +733,39 @@ class ComplexPlotApp:
 
 
     def delete_tooltip(self):
-     current_index = -1
+     """Delete the selected or closest annotation, even if not visible."""
+     if not self.annotations:
+        return  # No annotations to delete
 
-     if self.annotations :
-       
-       self.tooltip.set_visible(False)
-       x_t , y_t = self.tooltip.xy
+     # If an annotation was selected, delete it
+     if hasattr(self, "selected_annotation") and self.selected_annotation:
+        if self.selected_annotation in self.annotations:
+            self.selected_annotation.remove()  # Remove from plot
+            self.annotations.remove(self.selected_annotation)  # Remove from list
+        self.selected_annotation = None
+        self.canvas.draw_idle()
+        return
 
-       if self.annotations is not []:
+     # If no annotation is selected, remove the closest one to the last click
+     if hasattr(self, "last_click_coords"):
+        x_click, y_click = self.last_click_coords
+        closest_annotation = None
+        min_distance = float("inf")
+
         for annotation in self.annotations:
             x, y = annotation.xy
-            if x_t == x and y_t == y :
-                current_index = self.annotations.index(annotation)
-                self.annotations.remove(self.annotations[current_index])
-                self.canvas.draw_idle()
+            distance = (x - x_click) ** 2 + (y - y_click) ** 2  # Euclidean distance squared
+            if distance < min_distance:
+                min_distance = distance
+                closest_annotation = annotation
+
+        if closest_annotation:
+            closest_annotation.remove()
+            self.annotations.remove(closest_annotation)
+
+     self.canvas.draw_idle()
+
+
 
 
 
