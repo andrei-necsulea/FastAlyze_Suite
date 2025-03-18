@@ -3,6 +3,7 @@ from tkinter import ttk
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
+from tkinter import colorchooser
 
 class InteractivePlot:
     def __init__(self, root):
@@ -50,7 +51,65 @@ class InteractivePlot:
         
         self.create_plot_tab()
 
-       
+
+    def apply_legend(self):
+     """Save user-defined legend labels and update plot."""
+     self.legend_labels = [entry.get() for entry in self.legend_entries]
+     self.legend_popup.destroy()
+     self.update_plot()
+
+
+    def customize_legend(self):
+     """Popup window for manual legend customization."""
+     self.legend_popup = tk.Toplevel(self.root)
+     self.legend_popup.title("Customize Legend")
+     self.legend_popup.geometry("300x200")
+
+     ttk.Label(self.legend_popup, text="Enter legend labels:").pack(pady=10)
+    
+     self.legend_entries = []
+     for i in range(len(self.points)):  # One entry per data series
+        frame = ttk.Frame(self.legend_popup)
+        frame.pack(pady=2, fill="x")
+
+        ttk.Label(frame, text=f"Label {i+1}:").pack(side="left", padx=5)
+        entry = ttk.Entry(frame)
+        entry.pack(side="left", expand=True, fill="x")
+        entry.insert(0, f"Data {i+1}")  # Default label
+        self.legend_entries.append(entry)
+
+     ttk.Button(self.legend_popup, text="Apply", command=self.apply_legend).pack(pady=10)
+
+
+    def open_color_picker(self):
+     """Open a color picker and update the line color."""
+     color_code = colorchooser.askcolor(title="Choose Line Color")[1]  # Get hex code
+     if color_code:  # If the user picked a color, update it
+        self.line_color = color_code
+        self.line_color_combo.set("Custom")  # Show "Custom" in dropdown
+        self.update_plot()
+
+    
+    def open_line_style_window(self):
+     """Open a pop-up window to enter a custom line style."""
+     style_window = tk.Toplevel(self.root)
+     style_window.title("Custom Line Style")
+     style_window.geometry("250x150")
+
+     ttk.Label(style_window, text="Enter Line Style:").pack(pady=5)
+     style_entry = ttk.Entry(style_window)
+     style_entry.pack(pady=5)
+
+     def apply_style():
+        """Apply the entered line style."""
+        new_style = style_entry.get()
+        if new_style:
+            self.line_style = new_style
+            self.line_style_combo.set("Custom")  # Show "Custom" in dropdown
+            self.update_plot()
+        style_window.destroy()
+
+     ttk.Button(style_window, text="Apply", command=apply_style).pack(pady=10)
 
 
     def create_plot_tab(self):
@@ -89,7 +148,6 @@ class InteractivePlot:
         ttk.Button(controls_frame, text="Add Point", command=self.add_point).pack(side="left", padx=5)
         ttk.Button(controls_frame, text="Undo", command=self.undo).pack(side="left", padx=5)
         ttk.Button(controls_frame, text="Redo", command=self.redo).pack(side="left", padx=5)
-        ttk.Button(controls_frame, text="Export", command=self.export_plot).pack(side="left", padx=5)
 
         # Store original limits for reset function
         self.original_xlim = self.ax.get_xlim()
@@ -103,22 +161,28 @@ class InteractivePlot:
         # **New Reset Button**
         ttk.Button(controls_frame, text="Reset", command=self.reset_plot).pack(side="left", padx=5)
         
-        # Line style and color options
-        ttk.Label(controls_frame, text="Line Style:").pack(side="left", padx=5)
-        self.line_style_combo = ttk.Combobox(controls_frame, values=["-", "--", "-.", ":"], state="readonly")
-        self.line_style_combo.pack(side="left", padx=5)
-        self.line_style_combo.set(self.line_style)
-        self.line_style_combo.bind("<<ComboboxSelected>>", self.change_line_style)
-        
+        # Line Color
         ttk.Label(controls_frame, text="Line Color:").pack(side="left", padx=5)
-        self.line_color_combo = ttk.Combobox(controls_frame, values=["blue", "red", "green", "black"], state="readonly")
+        self.line_color_combo = ttk.Combobox(controls_frame, values=["blue", "red", "green", "black", "Custom"], state="readonly")
         self.line_color_combo.pack(side="left", padx=5)
         self.line_color_combo.set(self.line_color)
         self.line_color_combo.bind("<<ComboboxSelected>>", self.change_line_color)
 
+        ttk.Button(controls_frame, text="Custom Color", command=self.open_color_picker).pack(side="left", padx=5)
+
+        # Line Style
+        ttk.Label(controls_frame, text="Line Style:").pack(side="left", padx=5)
+        self.line_style_combo = ttk.Combobox(controls_frame, values=["-", "--", "-.", ":", "Custom"], state="readonly")
+        self.line_style_combo.pack(side="left", padx=5)
+        self.line_style_combo.set(self.line_style)
+        self.line_style_combo.bind("<<ComboboxSelected>>", self.change_line_style)
+
+        ttk.Button(controls_frame, text="Custom Style", command=self.open_line_style_window).pack(side="left", padx=5)
+
+
         # Marker size adjustment
         ttk.Label(controls_frame, text="Marker Size:").pack(side="left", padx=5)
-        self.marker_size_slider = ttk.Scale(controls_frame, from_=5, to=20, orient="horizontal", command=self.change_marker_size)
+        self.marker_size_slider = ttk.Scale(controls_frame, from_=5, to=300, orient="horizontal", command=self.change_marker_size)
         self.marker_size_slider.set(self.marker_size)
         self.marker_size_slider.pack(side="left", padx=5)
 
@@ -134,8 +198,59 @@ class InteractivePlot:
 
         self.canvas.mpl_connect('scroll_event', self.on_mouse_scroll)
         self.canvas.mpl_connect('motion_notify_event', self.on_mouse_drag)
+        # Connect double-click events
+        self.canvas.mpl_connect("button_press_event", self.on_double_click)
+
 
         self.prev_x, self.prev_y = None, None  # For panning
+
+    
+    def on_double_click(self, event):
+     """Detect double-click on title, xlabel, or ylabel to edit them."""
+     if event.dblclick:  # Double-click detected
+        if self.ax.title.contains(event)[0]:  
+            self.edit_label("title")  # Edit title
+        elif self.ax.xaxis.label.contains(event)[0]:  
+            self.edit_label("xlabel")  # Edit X-axis label
+        elif self.ax.yaxis.label.contains(event)[0]:  
+            self.edit_label("ylabel")  # Edit Y-axis label
+
+    
+    def edit_label(self, label_type):
+     """Popup window to edit title, xlabel, or ylabel."""
+     self.label_popup = tk.Toplevel(self.root)
+     self.label_popup.title("Edit Label")
+     self.label_popup.geometry("300x150")
+
+     ttk.Label(self.label_popup, text=f"Enter new {label_type}:").pack(pady=10)
+    
+     self.label_entry = ttk.Entry(self.label_popup, width=30)
+     self.label_entry.pack(pady=5)
+    
+     # Pre-fill with current text
+     if label_type == "title":
+        self.label_entry.insert(0, self.ax.get_title())
+     elif label_type == "xlabel":
+        self.label_entry.insert(0, self.ax.get_xlabel())
+     elif label_type == "ylabel":
+        self.label_entry.insert(0, self.ax.get_ylabel())
+
+     ttk.Button(self.label_popup, text="Apply", command=lambda: self.apply_label(label_type)).pack(pady=10)
+
+    
+    def apply_label(self, label_type):
+     """Apply new title, xlabel, or ylabel and update the plot dynamically."""
+     new_text = self.label_entry.get()
+
+     if label_type == "title":
+        self.ax.set_title(new_text)
+     elif label_type == "xlabel":
+        self.ax.set_xlabel(new_text)
+     elif label_type == "ylabel":
+        self.ax.set_ylabel(new_text)
+
+     self.label_popup.destroy()  # Close the popup
+     self.canvas.draw()  # Force the canvas to refresh
 
 
     def zoom(self, zoom_in=True):
@@ -154,6 +269,7 @@ class InteractivePlot:
      self.ax.set_xlim(new_xlim)
      self.ax.set_ylim(new_ylim)
      self.canvas.draw()
+
 
     def reset_zoom(self):
      """Reset the zoom to the original scale."""
@@ -220,7 +336,8 @@ class InteractivePlot:
      if self.grid_toggle_var.get():
         self.ax.grid(True)
      if self.legend_toggle_var.get():
-        self.ax.legend()
+        self.ax.legend(self.legend_labels)
+
 
      self.canvas.draw()
 
@@ -325,10 +442,6 @@ class InteractivePlot:
             self.points.append(self.redo_stack.pop())
             self.update_plot()
     
-    def export_plot(self):
-        """Export the plot as an image."""
-        self.figure.savefig("plot.png")
-    
     def change_line_style(self, event):
         """Change line style dynamically."""
         self.line_style = self.line_style_combo.get()
@@ -349,7 +462,13 @@ class InteractivePlot:
         self.update_plot()
     
     def toggle_legend(self):
-        """Toggle legend visibility."""
+     """Toggle legend visibility and close popup when unchecked."""
+     if self.legend_toggle_var.get():
+        self.customize_legend()  # Open popup for manual input
+     else:
+        self.legend_labels = ["Data"]  # Reset to default
+        if hasattr(self, 'legend_popup') and self.legend_popup.winfo_exists():
+            self.legend_popup.destroy()  # Close the popup if it's open
         self.update_plot()
 
     def on_mouse_scroll(self, event):
