@@ -217,16 +217,16 @@ class InteractivePlot:
 
     
     def edit_label(self, label_type):
-     """Popup window to edit title, xlabel, or ylabel."""
+     """Popup window to edit title, xlabel, or ylabel with font customization."""
      self.label_popup = tk.Toplevel(self.root)
      self.label_popup.title("Edit Label")
-     self.label_popup.geometry("300x150")
+     self.label_popup.geometry("400x300")
 
-     ttk.Label(self.label_popup, text=f"Enter new {label_type}:").pack(pady=10)
+     ttk.Label(self.label_popup, text=f"Edit {label_type}:").pack(pady=5)
     
      self.label_entry = ttk.Entry(self.label_popup, width=30)
      self.label_entry.pack(pady=5)
-    
+
      # Pre-fill with current text
      if label_type == "title":
         self.label_entry.insert(0, self.ax.get_title())
@@ -235,22 +235,71 @@ class InteractivePlot:
      elif label_type == "ylabel":
         self.label_entry.insert(0, self.ax.get_ylabel())
 
+     # Font type selection
+     ttk.Label(self.label_popup, text="Font:").pack(pady=5)
+     self.font_var = tk.StringVar(value="Arial")
+     font_options = ["Arial", "Times New Roman", "Courier New", "Verdana", "Comic Sans MS"]
+     self.font_dropdown = ttk.Combobox(self.label_popup, values=font_options, textvariable=self.font_var, state="readonly")
+     self.font_dropdown.pack()
+
+     # Font size selection
+     ttk.Label(self.label_popup, text="Font Size:").pack(pady=5)
+     self.font_size_var = tk.IntVar(value=12)
+     self.font_size_dropdown = ttk.Combobox(self.label_popup, values=[8, 10, 12, 14, 16, 18, 20, 24, 30], textvariable=self.font_size_var, state="readonly")
+     self.font_size_dropdown.pack()
+
+     # Bold & Italic checkboxes
+     self.bold_var = tk.BooleanVar()
+     self.italic_var = tk.BooleanVar()
+     ttk.Checkbutton(self.label_popup, text="Bold", variable=self.bold_var).pack()
+     ttk.Checkbutton(self.label_popup, text="Italic", variable=self.italic_var).pack()
+
+     # Color selection button
+     ttk.Button(self.label_popup, text="Change Color", command=lambda: self.pick_color(label_type)).pack(pady=5)
+
+     # Apply button
      ttk.Button(self.label_popup, text="Apply", command=lambda: self.apply_label(label_type)).pack(pady=10)
+
+
+    def pick_color(self, label_type):
+     """Open color picker and apply selected color to title, xlabel, or ylabel."""
+     color_code = colorchooser.askcolor(title="Select Color")[1]  # Get HEX color
+    
+     if color_code:  # If user selected a color
+        if label_type == "title":
+            self.ax.title.set_color(color_code)
+        elif label_type == "xlabel":
+            self.ax.xaxis.label.set_color(color_code)
+        elif label_type == "ylabel":
+            self.ax.yaxis.label.set_color(color_code)
+        
+        self.canvas.draw()  # Refresh plot
 
     
     def apply_label(self, label_type):
-     """Apply new title, xlabel, or ylabel and update the plot dynamically."""
+     """Apply new text, font, and style to title, xlabel, or ylabel."""
      new_text = self.label_entry.get()
+     font_family = self.font_var.get()
+     font_size = self.font_size_var.get()
+     font_weight = "bold" if self.bold_var.get() else "normal"
+     font_style = "italic" if self.italic_var.get() else "normal"
+
+     font_settings = {
+        "fontname": font_family,
+        "fontsize": font_size,
+        "fontweight": font_weight,
+        "style": font_style
+     }
 
      if label_type == "title":
-        self.ax.set_title(new_text)
+        self.ax.set_title(new_text, **font_settings)
      elif label_type == "xlabel":
-        self.ax.set_xlabel(new_text)
+        self.ax.set_xlabel(new_text, **font_settings)
      elif label_type == "ylabel":
-        self.ax.set_ylabel(new_text)
+        self.ax.set_ylabel(new_text, **font_settings)
 
-     self.label_popup.destroy()  # Close the popup
-     self.canvas.draw()  # Force the canvas to refresh
+     self.label_popup.destroy()  # Close popup
+     self.canvas.draw()  # Refresh plot
 
 
     def zoom(self, zoom_in=True):
