@@ -7,12 +7,17 @@ from tkinter import colorchooser
 
 class InteractivePlot:
     def __init__(self, root):
+
         self.root = root
         self.root.title("Interactive Plot Editor")
         self.notebook = ttk.Notebook(self.root)
         self.notebook.pack(fill='both', expand=True)
 
         self.point_attributes = {}  # Store attributes like color and size per point
+
+        self.font_settings_title = {}
+        self.font_settings_xlabel = {}
+        self.font_settings_ylabel = {}
         
         # **Default Styles**
         self.initial_line_style = "-"
@@ -262,7 +267,8 @@ class InteractivePlot:
 
 
     def pick_color(self, label_type):
-     """Open color picker and apply selected color to title, xlabel, or ylabel."""
+     global color_code_sender  
+
      color_code = colorchooser.askcolor(title="Select Color")[1]  # Get HEX color
     
      if color_code:  # If user selected a color
@@ -272,31 +278,50 @@ class InteractivePlot:
             self.ax.xaxis.label.set_color(color_code)
         elif label_type == "ylabel":
             self.ax.yaxis.label.set_color(color_code)
-        
-        self.canvas.draw()  # Refresh plot
+
+     
+     color_code_sender = str(color_code)
+
+     self.canvas.draw()  # Refresh plot
 
     
     def apply_label(self, label_type):
+     
      """Apply new text, font, and style to title, xlabel, or ylabel."""
      new_text = self.label_entry.get()
      font_family = self.font_var.get()
      font_size = self.font_size_var.get()
      font_weight = "bold" if self.bold_var.get() else "normal"
      font_style = "italic" if self.italic_var.get() else "normal"
+     
 
-     font_settings = {
+     if label_type == "title":
+        self.font_settings_title = {
         "fontname": font_family,
         "fontsize": font_size,
         "fontweight": font_weight,
-        "style": font_style
-     }
-
-     if label_type == "title":
-        self.ax.set_title(new_text, **font_settings)
+        "style": font_style,
+        "color" : color_code_sender
+        }
+        self.ax.set_title(new_text, **self.font_settings_title)
      elif label_type == "xlabel":
-        self.ax.set_xlabel(new_text, **font_settings)
+        self.font_settings_xlabel = {
+        "fontname": font_family,
+        "fontsize": font_size,
+        "fontweight": font_weight,
+        "style": font_style,
+        "color" : color_code_sender
+        }
+        self.ax.set_xlabel(new_text, **self.font_settings_xlabel)
      elif label_type == "ylabel":
-        self.ax.set_ylabel(new_text, **font_settings)
+        self.font_settings_ylabel = {
+        "fontname": font_family,
+        "fontsize": font_size,
+        "fontweight": font_weight,
+        "style": font_style,
+        "color" : color_code_sender
+        }
+        self.ax.set_ylabel(new_text, **self.font_settings_ylabel)
 
      self.label_popup.destroy()  # Close popup
      self.canvas.draw()  # Refresh plot
@@ -325,7 +350,6 @@ class InteractivePlot:
      self.ax.set_xlim(self.original_xlim)
      self.ax.set_ylim(self.original_ylim)
      self.canvas.draw()
-
 
 
     def reset_plot(self):
@@ -368,13 +392,17 @@ class InteractivePlot:
                 self.root.after_cancel(self.live_update_task_id)  # Cancel live updates
                 self.live_update_task_id = None  # Clear the task ID
 
-    def update_plot(self):
-     """Update the plot with latest data and attributes."""
-     self.ax.clear()
-     self.ax.set_title("Advanced Plot")
-     self.ax.set_xlabel("X-axis")
-     self.ax.set_ylabel("Y-axis")
 
+    def update_plot(self):
+     """Update the plot with latest data and attributes while preserving colors and styles."""
+     # ✅ Save current title, xlabel, ylabel, and their properties
+     current_title = self.ax.get_title()
+     current_xlabel = self.ax.get_xlabel()
+     current_ylabel = self.ax.get_ylabel()
+
+     self.ax.cla()
+
+     # ✅ Redraw points
      for (x, y) in self.points:
         attrs = self.point_attributes.get((x, y), {"color": "red", "size": self.marker_size})
         self.ax.scatter(x, y, color=attrs["color"], s=attrs["size"])
@@ -382,11 +410,15 @@ class InteractivePlot:
      x_vals, y_vals = zip(*self.points) if self.points else ([], [])
      self.ax.plot(x_vals, y_vals, linestyle=self.line_style, color=self.line_color, label="Data")
 
+     # ✅ Restore title, xlabel, ylabel with colors and fonts
+     self.ax.set_title(current_title, **self.font_settings_title)
+     self.ax.set_xlabel(current_xlabel, **self.font_settings_xlabel)
+     self.ax.set_ylabel(current_ylabel, **self.font_settings_ylabel)
+
      if self.grid_toggle_var.get():
         self.ax.grid(True)
      if self.legend_toggle_var.get():
         self.ax.legend(self.legend_labels)
-
 
      self.canvas.draw()
 
