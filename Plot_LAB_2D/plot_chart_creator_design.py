@@ -9,6 +9,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from File_Reader import import_excel , import_csv , import_word 
 from Building_Editing_Code import analysis_code_to_python_support , python_to_analysis_code_support , figure_to_code_support , converter_style , table_editor , csv_analyzer , grain_shape_analyzer
 from docs import open_docs 
+from Line_Plot import line_plot_graph_properties_afterexcel
 
 
 
@@ -275,7 +276,7 @@ frame_1.grid_columnconfigure(4, weight=1)
 #border=0.15
 line_plot_img = ctk.CTkImage(light_image= Image.open(str(os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))) + r"\Plot_LAB_2D\Line_Plot\Line_Plot_1.png") , size=(110,110))
 
-b1 = ctk.CTkButton(frame_1 , image = line_plot_img , border_color='lightgray'  , border_width = 1.5 , command = line_plot_counter , compound = "top" , text = "Line Plot" , font = ctk.CTkFont(weight="bold", size = 14 , family = "Times")  , fg_color = "white" , text_color="black" , hover_color="white" , corner_radius=30 )
+b1 = ctk.CTkButton(frame_1 , image = line_plot_img , border_color='lightgray'  , border_width = 1.5 , command = combine_funcs(line_plot_counter , line_plot_graph_properties_afterexcel.line) , compound = "top" , text = "Line Plot" , font = ctk.CTkFont(weight="bold", size = 14 , family = "Times")  , fg_color = "white" , text_color="black" , hover_color="white" , corner_radius=30 )
 
 b1.grid(column = 1 , row = 3 ,   pady = 1 , padx = 1)
 #bf9319

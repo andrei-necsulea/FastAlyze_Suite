@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import ttk, Menu
+from tkinter import ttk, Menu, filedialog
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
@@ -8,15 +8,30 @@ from matplotlib.backend_bases import MouseButton
 from tkinter import colorchooser, simpledialog
 from scipy.spatial import KDTree
 import matplotlib.patches as patches
-
+import os
+import pandas as pd
+from tkinter import messagebox
+from tkinterdnd2 import TkinterDnD, DND_FILES
 
 class InteractivePlot:
-    def __init__(self, root):
-        self.root = root
+    def __init__(self):
+        # Create main window using TkinterDnD
+        self.root = TkinterDnD.Tk()
         self.root.title("Interactive Plot Editor")
+        
+        # Enhanced subplot management
+        self.subplots = {}  # Format: {id: {'ax': ax, 'fig': fig, 'canvas': canvas, 'state': {...}}}
+        self.active_subplot = None
+        self.subplot_states = {}  # Track state for each subplot
+        
+        # Initialize drag and drop
+        self.root.drop_target_register(DND_FILES)
+        self.root.dnd_bind('<<Drop>>', self.handle_file_drop)
+        
+        # Create notebook
         self.notebook = ttk.Notebook(self.root)
         self.notebook.pack(fill='both', expand=True)
-
+        
         # Initialize points and data structures
         self.points = np.array([(1, 10), (2, 20), (3, 25), (4, 30)])  # Initial points as numpy array
         self.point_labels = {}  # Dictionary for point labels
@@ -25,6 +40,11 @@ class InteractivePlot:
         self.is_dragging = False  # Flag to track dragging
         self.drag_start = None  # Position for drag start
         self.point_attributes = {}  # Store attributes like color and size per point
+
+        # Track active plot elements (main or subplot)
+        self.active_figure = None
+        self.active_ax = None
+        self.active_canvas = None
 
         # Custom label properties for persistent formatting
         self.custom_labels = {}
@@ -63,10 +83,22 @@ class InteractivePlot:
         self.initial_points = np.array([(1, 10), (2, 20), (3, 25), (4, 30)])  # Save the original state
         self.points = self.initial_points.copy()
 
+        # Store original axis limits
+        self.original_xlim = (0, 10)
+        self.original_ylim = (0, 35)
+
         # Create KDTree for point proximity detection
         self.update_kdtree()
 
+        # Undo/Redo functionality
+        self.history = []  # Stack for undo operations
+        self.redo_stack = []  # Stack for redo operations
+
+        # Create initial plot tab
         self.create_plot_tab()
+
+        # Add tab switching handler
+        self.notebook.bind("<<NotebookTabChanged>>", self.on_tab_switch)
 
     def update_kdtree(self):
         """Update the KDTree with current points"""
@@ -307,7 +339,7 @@ class InteractivePlot:
         current_text = annotation.get_text()
 
         # Ask for new text
-        new_text = simpledialog.askstring("Edit Tooltip", "Enter new tooltip text:", 
+        new_text = simpledialog.askstring("Edit Tooltip", "Enter new tooltip text:",
                                         initialvalue=current_text)
 
         if new_text:
@@ -475,34 +507,75 @@ class InteractivePlot:
         ttk.Button(button_frame, text="Cancel", command=edit_window.destroy).pack(side="right", padx=10)
 
     def on_press(self, event):
-        """Handle mouse press events for panning, selecting, and context menu"""
+        """Handle mouse press events"""
         if not hasattr(event, 'xdata') or not hasattr(event, 'ydata') or event.xdata is None or event.ydata is None:
             return
 
-        # Check if event is inside the axes
-        if not hasattr(event, 'inaxes') or event.inaxes != self.ax:
+        # Right-click for context menu functionality
+        if event.button == MouseButton.RIGHT:
+            # Create context menu
+            context_menu = tk.Menu(self.root, tearoff=0)
+            
+            # Add activation options
+            context_menu.add_command(
+                label="Activate Main Plot",
+                command=lambda: self.activate_main_plot()
+            )
+            
+            # Add all subplot options
+            for subplot_id in self.subplots.keys():
+                context_menu.add_command(
+                    label=f"Activate {subplot_id}",
+                    command=lambda id=subplot_id: self.set_active_subplot(id)
+                )
+                
+            # Add separator
+            context_menu.add_separator()
+            
+            # Add point functionality if clicking on a point
+            point_idx = self.get_point_index(event)
+            if point_idx is not None:
+                context_menu.add_command(
+                    label="Delete Point",
+                    command=lambda: self.delete_point(point_idx)
+                )
+                context_menu.add_command(
+                    label="Edit Point",
+                    command=lambda: self.edit_point(point_idx)
+                )
+                context_menu.add_separator()
+            
+            # Add general plot options
+            context_menu.add_command(
+                label="Add Point Here", 
+                command=lambda: self.add_point(event.xdata, event.ydata)
+            )
+            context_menu.add_command(
+                label="Toggle Grid",
+                command=lambda: self.toggle_grid()
+            )
+                
+            # Show menu at mouse position
+            try:
+                if hasattr(event, 'guiEvent'):
+                    context_menu.tk_popup(event.guiEvent.x_root, event.guiEvent.y_root)
+                else:
+                    # Fallback if guiEvent not available
+                    x = self.canvas.get_tk_widget().winfo_rootx() + event.x
+                    y = self.canvas.get_tk_widget().winfo_rooty() + event.y
+                    context_menu.tk_popup(x, y)
+            except Exception as e:
+                print(f"Menu error: {e}")
+            finally:
+                context_menu.grab_release()
+            
             return
-
+            
+        # Rest of press handling...
         # Middle button for panning
         if event.button == MouseButton.MIDDLE:
             self.prev_x, self.prev_y = event.xdata, event.ydata
             self.canvas.get_tk_widget().config(cursor="fleur")  # Change cursor for panning
-
-        # Right-click for context menu on any annotation
-        elif event.button == MouseButton.RIGHT:
-            for idx, ann in self.annotations.items():
-                try:
-                    contains, _ = ann.contains(event)
-                    if contains:
-                        self.show_context_menu(event, idx, ann)
-                        return
-                except:
-                    # Fallback if contains method fails
-                    ann_xy = getattr(ann, 'xy', None)
-                    if ann_xy is not None:
-                        if abs(ann_xy[0] - event.xdata) < 0.1 and abs(ann_xy[1] - event.ydata) < 0.1:
-                            self.show_context_menu(event, idx, ann)
-                            return
 
         # Left-click to start dragging points
         elif event.button == MouseButton.LEFT:
@@ -512,33 +585,24 @@ class InteractivePlot:
                 self.dragging_idx = point_idx
                 return
 
-    def show_tooltip_context_menu(self, event):
-        """Show a context menu for tooltip operations"""
-        context_menu = Menu(self.root, tearoff=0)
-        context_menu.add_command(label="Delete Tooltip", command=self.remove_tooltip)
-        context_menu.add_command(label="Edit Tooltip", command=self.edit_tooltip_text)
-
-        # Display the menu at the mouse position on the canvas
-        # Convert matplotlib event coordinates to screen coordinates
-        x = self.canvas.get_tk_widget().winfo_rootx() + event.x
-        y = self.canvas.get_tk_widget().winfo_rooty() + event.y
-        context_menu.post(x, y)
-
-    def edit_tooltip_text(self):
-        """Edit the text of the current tooltip"""
-        if not self.tooltip:
-            return
-
-        # Get current text
-        current_text = self.tooltip.get_text()
-
-        # Ask for new text
-        new_text = simpledialog.askstring("Edit Tooltip", "Enter new tooltip text:",
-                                         initialvalue=current_text)
-
-        if new_text:
-            # Update tooltip text
-            self.tooltip.set_text(new_text)
+    def activate_main_plot(self):
+        """Activate main plot and switch to first tab"""
+        self.active_subplot = None
+        self.notebook.select(0)
+        
+        # Highlight main plot
+        if hasattr(self, 'ax'):
+            for spine in self.ax.spines.values():
+                spine.set_color('red')
+                
+        # Reset subplot highlights
+        for subplot in self.subplots.values():
+            if 'ax' in subplot:
+                for spine in subplot['ax'].spines.values():
+                    spine.set_color('black')
+                    
+        # Force redraw
+        if hasattr(self, 'canvas'):
             self.canvas.draw_idle()
 
     def on_motion(self, event):
@@ -596,35 +660,33 @@ class InteractivePlot:
             self.on_motion(event)
             self.prev_x, self.prev_y = event.xdata, event.ydata
 
-    def create_plot_tab(self):
-        """Interactive Plot Tab with dynamic editing features."""
-        tab = ttk.Frame(self.notebook)
-        self.notebook.add(tab, text="   Interactive Plot   ")
-
-        # Create a matplotlib figure for interactive plotting
-        self.figure = Figure(figsize=(5, 3), dpi=100)
-        self.ax = self.figure.add_subplot(111)
-        self.ax.set_title("Advanced Plot")
-        self.ax.set_xlabel("X-axis")
-        self.ax.set_ylabel("Y-axis")
-
-        # Embed the figure in the GUI
-        self.canvas = FigureCanvasTkAgg(self.figure, tab)
-        self.canvas_widget = self.canvas.get_tk_widget()
-        self.canvas_widget.pack(fill="both", expand=True)
-
-        # Initial plot
-        self.update_plot()
-
-        # Controls Frame
-        controls_frame = ttk.Frame(tab, relief=tk.RIDGE, borderwidth=2)
+    def create_properties_controls(self, parent_frame, subplot_id=None):
+        """Create controls for a specific subplot"""
+        controls_frame = ttk.Frame(parent_frame, relief=tk.RIDGE, borderwidth=2)
         controls_frame.pack(side="bottom", fill="x", pady=5)
 
-        # Undo/Redo Stack
-        self.history = []
-        self.redo_stack = []
-
-        # Buttons for first row
+        # Title/Label controls
+        label_frame = ttk.Frame(controls_frame)
+        label_frame.pack(side="top", fill="x", pady=2)
+        
+        ttk.Label(label_frame, text="Title:").pack(side="left")
+        self.title_entry = ttk.Entry(label_frame)
+        self.title_entry.pack(side="left", fill="x", expand=True, padx=5)
+        
+        ttk.Label(label_frame, text="X Label:").pack(side="left")
+        self.xlabel_entry = ttk.Entry(label_frame)
+        self.xlabel_entry.pack(side="left", fill="x", expand=True, padx=5)
+        
+        ttk.Label(label_frame, text="Y Label:").pack(side="left")
+        self.ylabel_entry = ttk.Entry(label_frame)
+        self.ylabel_entry.pack(side="left", fill="x", expand=True, padx=5)
+        
+        # Update button
+        update_btn = ttk.Button(label_frame, text="Update", command=lambda: self.update_labels(subplot_id))
+        update_btn.pack(side="right", padx=5)
+        
+        # Style controls (existing implementation)
+        # First row of buttons
         buttons_frame1 = ttk.Frame(controls_frame)
         buttons_frame1.pack(side="top", fill="x", pady=2)
 
@@ -632,16 +694,10 @@ class InteractivePlot:
         ttk.Button(buttons_frame1, text="Undo", command=self.undo).pack(side="left", padx=5)
         ttk.Button(buttons_frame1, text="Redo", command=self.redo).pack(side="left", padx=5)
 
-        # Store original limits for reset function
-        self.original_xlim = self.ax.get_xlim()
-        self.original_ylim = self.ax.get_ylim()
-
-        # Add Zoom Buttons
+        # Zoom controls
         ttk.Button(buttons_frame1, text="Zoom In", command=lambda: self.zoom(True)).pack(side="left", padx=5)
         ttk.Button(buttons_frame1, text="Zoom Out", command=lambda: self.zoom(False)).pack(side="left", padx=5)
         ttk.Button(buttons_frame1, text="Reset Zoom", command=self.reset_zoom).pack(side="left", padx=5)
-
-        # Reset Button
         ttk.Button(buttons_frame1, text="Reset", command=self.reset_plot).pack(side="left", padx=5)
 
         # Second row of controls
@@ -681,77 +737,705 @@ class InteractivePlot:
         ttk.Checkbutton(controls_frame3, text="Grid", variable=self.grid_toggle_var, command=self.toggle_grid).pack(side="left", padx=5)
         ttk.Checkbutton(controls_frame3, text="Legend", variable=self.legend_toggle_var, command=self.toggle_legend).pack(side="left", padx=5)
         ttk.Button(controls_frame3, text="Edit Legend", command=self.customize_legend).pack(side="left", padx=5)
+        ttk.Button(controls_frame3, text="Add Subplot", command=self.add_subplot).pack(side="left", padx=5)
+
+        # Fourth row - Data Management Controls
+        controls_frame4 = ttk.Frame(controls_frame)
+        controls_frame4.pack(side="top", fill="x", pady=2)
+
+        # Import/Export buttons
+        ttk.Button(controls_frame4, text="Import Data", command=self.show_import_dialog).pack(side="left", padx=5)
+        ttk.Button(controls_frame4, text="Export Plot", command=self.show_export_dialog).pack(side="left", padx=5)
+        
+        # Filter dropdown
+        ttk.Label(controls_frame4, text="Filter:").pack(side="left", padx=5)
+        self.filter_combo = ttk.Combobox(controls_frame4, values=["None", "Numeric Range", "Outliers"], state="readonly", width=12)
+        self.filter_combo.pack(side="left", padx=5)
+        self.filter_combo.set("None")
+        
+        ttk.Button(controls_frame4, text="Apply Filter", command=self.apply_filter).pack(side="left", padx=5)
+
+        # Initialize with current values if subplot exists
+        if subplot_id and subplot_id in self.subplot_states:
+            state = self.subplot_states[subplot_id]
+            self.title_entry.insert(0, state['title'])
+            self.xlabel_entry.insert(0, state['xlabel'])
+            self.ylabel_entry.insert(0, state['ylabel'])
+            
+            if hasattr(self, 'line_color_combo'):
+                self.line_color_combo.set(state['line_color'])
+            if hasattr(self, 'line_style_combo'):
+                self.line_style_combo.set(state['line_style'])
+            if hasattr(self, 'marker_size_slider'):
+                self.marker_size_slider.set(state['marker_size'])
+
+    def update_labels(self, subplot_id):
+        """Update labels for a specific subplot"""
+        if subplot_id in self.subplot_states:
+            self.subplot_states[subplot_id].update({
+                'title': self.title_entry.get(),
+                'xlabel': self.xlabel_entry.get(),
+                'ylabel': self.ylabel_entry.get()
+            })
+            
+            # Update both views
+            self.update_main_view()
+            self.subplots[subplot_id]['canvas'].draw_idle()
+            
+            # If this is the active subplot, update controls
+            if self.active_subplot == subplot_id:
+                self.set_active_subplot(subplot_id)
+
+    def on_tab_switch(self, event=None):
+        """Handle tab switching or manual activation"""
+        # If called manually (not from event), switch to first tab
+        if event is None:
+            self.notebook.select(0)
+            
+        current_tab = self.notebook.index(self.notebook.select())
+        
+        if current_tab == 0:
+            # Main plot tab
+            self.active_subplot = None
+            
+            # Highlight main plot
+            if hasattr(self, 'ax'):
+                for spine in self.ax.spines.values():
+                    spine.set_color('red')
+            
+            # Reset subplot highlights
+            for subplot in self.subplots.values():
+                if hasattr(subplot, 'ax'):
+                    for spine in subplot['ax'].spines.values():
+                        spine.set_color('black')
+        else:
+            # Subplot tab
+            subplot_id = list(self.subplots.keys())[current_tab - 1]
+            self.set_active_subplot(subplot_id)
+            
+            # Reset main plot highlight
+            if hasattr(self, 'ax'):
+                for spine in self.ax.spines.values():
+                    spine.set_color('black')
+
+    def set_active_subplot(self, subplot_id):
+        """Properly activate subplot with full state update"""
+        if subplot_id in self.subplots:
+            self.active_subplot = subplot_id
+            subplot = self.subplots[subplot_id]
+            
+            # Switch to the subplot tab
+            subplot_index = list(self.subplots.keys()).index(subplot_id)
+            self.notebook.select(subplot_index + 1)  # +1 for main tab offset
+            
+            # Clear all borders
+            for s_id, s_data in self.subplots.items():
+                for spine in s_data['ax'].spines.values():
+                    spine.set_color('black')
+            
+            # Clear main plot border
+            if hasattr(self, 'ax'):
+                for spine in self.ax.spines.values():
+                    spine.set_color('black')
+            
+            # Highlight active subplot
+            for spine in subplot['ax'].spines.values():
+                spine.set_color('red')
+            
+            # Also highlight the subplot in the main view
+            if hasattr(self, 'figure'):
+                # Find this subplot in the main figure
+                for i, ax in enumerate(self.figure.axes):
+                    if i == list(self.subplots.keys()).index(subplot_id) + 1:  # +1 for main plot
+                        for spine in ax.spines.values():
+                            spine.set_color('red')
+                
+            # Update control values from state
+            state = self.subplot_states[subplot_id]
+            if hasattr(self, 'title_entry'):
+                self.title_entry.delete(0, tk.END)
+                self.title_entry.insert(0, state['title'])
+            if hasattr(self, 'xlabel_entry'):
+                self.xlabel_entry.delete(0, tk.END)
+                self.xlabel_entry.insert(0, state['xlabel'])
+            if hasattr(self, 'ylabel_entry'):
+                self.ylabel_entry.delete(0, tk.END)
+                self.ylabel_entry.insert(0, state['ylabel'])
+            
+            # Force redraw
+            subplot['canvas'].draw_idle()
+            if hasattr(self, 'canvas'):
+                self.canvas.draw_idle()
+
+    def edit_subplot(self, subplot_id):
+        """Handle subplot editing with proper synchronization"""
+        if subplot_id in self.subplots:
+            # Get current control values
+            new_title = self.title_entry.get() if hasattr(self, 'title_entry') else ""
+            
+            # Update state
+            self.subplot_states[subplot_id].update({
+                'title': new_title,
+                # Add other properties here
+            })
+            
+            # Update both views
+            self.update_main_view()
+            self.subplots[subplot_id]['canvas'].draw_idle()
+
+    def save_state(self):
+        """Save current state for undo functionality"""
+        # Deep copy custom labels to ensure we store a complete snapshot
+        custom_labels_copy = {}
+        if hasattr(self, 'custom_labels'):
+            for key, value in self.custom_labels.items():
+                custom_labels_copy[key] = value.copy()
+
+        state = {
+            'points': self.points.copy(),
+            'line_color': self.line_color,
+            'line_style': self.line_style,
+            'marker_size': self.marker_size,
+            'custom_labels': custom_labels_copy
+        }
+        self.history.append(state)
+        # Clear redo stack after a new action
+        self.redo_stack = []
+
+    def undo(self):
+        """Undo the last action"""
+        if len(self.history) > 0:
+            # Deep copy custom labels for current state
+            custom_labels_copy = {}
+            if hasattr(self, 'custom_labels'):
+                for key, value in self.custom_labels.items():
+                    custom_labels_copy[key] = value.copy()
+
+            # Save current state to redo stack
+            current_state = {
+                'points': self.points.copy(),
+                'line_color': self.line_color,
+                'line_style': self.line_style,
+                'marker_size': self.marker_size,
+                'custom_labels': custom_labels_copy
+            }
+            self.redo_stack.append(current_state)
+
+            # Restore previous state
+            previous_state = self.history.pop()
+            self.points = previous_state['points'].copy()
+            self.line_color = previous_state['line_color']
+            self.line_style = previous_state['line_style']
+            self.marker_size = previous_state['marker_size']
+
+            # Restore custom labels if they exist in the saved state
+            if 'custom_labels' in previous_state:
+                self.custom_labels = previous_state['custom_labels']
+
+            # Update UI
+            self.line_color_combo.set(self.line_color)
+            self.line_style_combo.set(self.line_style)
+            self.marker_size_slider.set(self.marker_size)
+
+            # Update KDTree and plot
+            self.update_kdtree()
+            self.update_plot()
+
+    def redo(self):
+        """Redo the last undone action"""
+        if len(self.redo_stack) > 0:
+            # Deep copy custom labels for current state
+            custom_labels_copy = {}
+            if hasattr(self, 'custom_labels'):
+                for key, value in self.custom_labels.items():
+                    custom_labels_copy[key] = value.copy()
+
+            # Save current state to history
+            current_state = {
+                'points': self.points.copy(),
+                'line_color': self.line_color,
+                'line_style': self.line_style,
+                'marker_size': self.marker_size,
+                'custom_labels': custom_labels_copy
+            }
+            self.history.append(current_state)
+
+            # Restore next state
+            next_state = self.redo_stack.pop()
+            self.points = next_state['points'].copy()
+            self.line_color = next_state['line_color']
+            self.line_style = next_state['line_style']
+            self.marker_size = next_state['marker_size']
+
+            # Restore custom labels if they exist in the saved state
+            if 'custom_labels' in next_state:
+                self.custom_labels = next_state['custom_labels']
+
+            # Update UI
+            self.line_color_combo.set(self.line_color)
+            self.line_style_combo.set(self.line_style)
+            self.marker_size_slider.set(self.marker_size)
+
+            # Update KDTree and plot
+            self.update_kdtree()
+            self.update_plot()
+
+    def update_plot(self):
+        """Update the entire plot with current settings"""
+        # Just call plot_points which now handles everything needed for a proper update
+        # This prevents duplicate code and ensures consistent behavior
+        self.plot_points()
+
+    def plot_points(self):
+        """Plot points and connecting lines with current styles"""
+        if len(self.points) == 0:
+            return
+
+        # Store current limits and labels
+        xlim = self.ax.get_xlim()
+        ylim = self.ax.get_ylim()
+
+        # Store current label properties before clearing
+        title_text = self.ax.get_title() or "Advanced Plot"
+        xlabel_text = self.ax.get_xlabel() or "X-axis"
+        ylabel_text = self.ax.get_ylabel() or "Y-axis"
+
+        # Store custom label properties if they exist
+        custom_title_props = {}
+        custom_xlabel_props = {}
+        custom_ylabel_props = {}
+
+        # Check if we have saved custom label settings
+        if hasattr(self, 'custom_labels'):
+            if 'title' in self.custom_labels:
+                custom_title_props = self.custom_labels['title']
+                title_text = custom_title_props.get('text', title_text)
+            if 'xlabel' in self.custom_labels:
+                custom_xlabel_props = self.custom_labels['xlabel']
+                xlabel_text = custom_xlabel_props.get('text', xlabel_text)
+            if 'ylabel' in self.custom_labels:
+                custom_ylabel_props = self.custom_labels['ylabel']
+                ylabel_text = custom_ylabel_props.get('text', ylabel_text)
+
+        # Clear current plot
+        self.ax.clear()
+
+        # Re-apply labels with custom settings if available
+        if custom_title_props:
+            self.ax.set_title(title_text, 
+                             fontsize=custom_title_props.get('fontsize', 12),
+                             color=custom_title_props.get('color', 'black'),
+                             fontweight=custom_title_props.get('fontweight', 'normal'),
+                             fontstyle=custom_title_props.get('fontstyle', 'normal'))
+        else:
+            self.ax.set_title(title_text)
+
+        if custom_xlabel_props:
+            self.ax.set_xlabel(xlabel_text,
+                              fontsize=custom_xlabel_props.get('fontsize', 10),
+                              color=custom_xlabel_props.get('color', 'black'),
+                              fontweight=custom_xlabel_props.get('fontweight', 'normal'),
+                              fontstyle=custom_xlabel_props.get('fontstyle', 'normal'))
+        else:
+            self.ax.set_xlabel(xlabel_text)
+
+        if custom_ylabel_props:
+            self.ax.set_ylabel(ylabel_text,
+                              fontsize=custom_ylabel_props.get('fontsize', 10),
+                              color=custom_ylabel_props.get('color', 'black'),
+                              fontweight=custom_ylabel_props.get('fontweight', 'normal'),
+                              fontstyle=custom_ylabel_props.get('fontstyle', 'normal'))
+        else:
+            self.ax.set_ylabel(ylabel_text)
+
+        # Extract x and y coordinates
+        x = self.points[:, 0]
+        y = self.points[:, 1]
+
+        # Plot line and points
+        self.ax.plot(x, y, linestyle=self.line_style, color=self.line_color, marker='o', 
+                     markersize=self.marker_size/2, markerfacecolor=self.line_color)
+
+        # Highlight dragging point if any
+        if self.dragging_idx is not None and self.dragging_idx < len(self.points):
+            self.ax.plot(self.points[self.dragging_idx, 0], self.points[self.dragging_idx, 1], 
+                        'o', markersize=self.marker_size/1.5, markerfacecolor='yellow', 
+                        markeredgecolor='red', markeredgewidth=2)
+
+        # Restore all annotations
+        for idx, ann in list(self.annotations.items()):
+            if idx < len(self.points):  # Make sure the point still exists
+                x, y = self.points[idx]
+
+                # Update annotation position and text
+                ann.xy = (x, y)
+                ann.set_text(f"({x:.2f}, {y:.2f})")
+
+        # Apply grid if enabled
+        self.ax.grid(self.grid_toggle_var.get())
+
+        # Apply legend if enabled
+        if self.legend_toggle_var.get():
+            if hasattr(self, 'legend_labels'):
+                if hasattr(self, 'legend_position'):
+                    self.ax.legend(self.legend_labels, loc=self.legend_position)
+                else:
+                    self.ax.legend(self.legend_labels)
+            else:
+                self.ax.legend([f"Data {i+1}" for i in range(len(self.points))])
+
+        # Restore original view limits
+        self.ax.set_xlim(xlim)
+        self.ax.set_ylim(ylim)
+
+        # Draw only what's needed without changing axis limits
+        self.canvas.draw_idle()
+
+    def add_point(self, x=None, y=None):
+        """Add point to active subplot or main plot"""
+        if self.active_subplot and self.active_subplot in self.subplots:
+            subplot = self.subplots[self.active_subplot]
+            
+            # Ensure points exist in subplot
+            if 'points' not in subplot:
+                subplot['points'] = np.array([]).reshape(0, 2)
+                
+            # Add point to both subplot and state
+            if x is None or y is None:
+                x_min, x_max = subplot['ax'].get_xlim()
+                y_min, y_max = subplot['ax'].get_ylim()
+                new_x = np.random.uniform(x_min, x_max)
+                new_y = np.random.uniform(y_min, y_max)
+            else:
+                new_x = x
+                new_y = y
+                
+            new_point = np.array([[new_x, new_y]])
+            subplot['points'] = np.vstack([subplot['points'], new_point])
+            self.subplot_states[self.active_subplot]['points'] = subplot['points'].copy()
+            
+            # Update the subplot
+            subplot['ax'].plot(new_x, new_y, 'o')
+            subplot['canvas'].draw_idle()
+            
+            # Update main view
+            self.update_main_view()
+        else:
+            # Add to main plot
+            if x is None or y is None:
+                x_min, x_max = self.ax.get_xlim()
+                y_min, y_max = self.ax.get_ylim()
+                new_x = np.random.uniform(x_min, x_max)
+                new_y = np.random.uniform(y_min, y_max)
+            else:
+                new_x = x
+                new_y = y
+                
+            if len(self.points) == 0:
+                self.points = np.array([[new_x, new_y]])
+            else:
+                self.points = np.vstack([self.points, [new_x, new_y]])
+                
+            self.update_kdtree()
+            self.update_plot()
+
+    def handle_file_drop(self, event):
+        """Handle dropped files on the plot area"""
+        file_path = event.data.strip('{}')
+        if not os.path.exists(file_path):
+            return
+            
+        # Get mouse position to determine target subplot
+        x, y = self.root.winfo_pointerxy()
+        target = self.get_subplot_at_position(x, y)
+        
+        if target:
+            self.show_data_import_dialog(file_path, target)
+        
+    def get_subplot_at_position(self, x, y):
+        """Find which subplot contains given screen coordinates"""
+        for widget in self.root.winfo_children():
+            if widget.winfo_contain(x, y):
+                if hasattr(widget, 'subplot_id'):
+                    return widget.subplot_id
+        return None
+        
+    def show_data_import_dialog(self, file_path, subplot_id):
+        """Show dialog for data import options"""
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Import Data")
+        
+        tk.Label(dialog, text=f"Import {os.path.basename(file_path)} to:").pack(pady=10)
+        
+        plot_type_var = tk.StringVar(value="line")
+        tk.Label(dialog, text="Plot Type:").pack()
+        tk.OptionMenu(dialog, plot_type_var, 
+                     "line", "scatter", "bar", "histogram", 
+                     "pie", "heatmap", "3d").pack()
+                     
+        import_mode = tk.StringVar(value="replace")
+        tk.Label(dialog, text="Import Mode:").pack()
+        tk.Radiobutton(dialog, text="Replace Existing", variable=import_mode, value="replace").pack()
+        tk.Radiobutton(dialog, text="Append Data", variable=import_mode, value="append").pack()
+        
+        def handle_import():
+            try:
+                data = self.load_data_file(file_path)
+                self.plot_data(subplot_id, data, plot_type_var.get(), import_mode.get())
+                dialog.destroy()
+            except Exception as e:
+                messagebox.showerror("Error", f"Failed to import data: {str(e)}")
+        
+        tk.Button(dialog, text="Import", command=handle_import).pack(pady=10)
+        
+    def load_data_file(self, file_path):
+        """Load data from various file formats"""
+        if file_path.endswith('.csv'):
+            return pd.read_csv(file_path)
+        elif file_path.endswith(('.xls', '.xlsx')):
+            return pd.read_excel(file_path)
+        else:
+            raise ValueError("Unsupported file format")
+            
+    def plot_data(self, subplot_id, data, plot_type, mode):
+        """Plot data in specified subplot"""
+        self.save_state()
+        ax = self.subplots[subplot_id]['ax']
+        
+        if mode == "replace":
+            ax.clear()
+            
+        if plot_type == "line":
+            ax.plot(data.iloc[:,0], data.iloc[:,1])
+        elif plot_type == "scatter":
+            ax.scatter(data.iloc[:,0], data.iloc[:,1])
+        elif plot_type == "bar":
+            ax.bar(data.iloc[:,0], data.iloc[:,1])
+        elif plot_type == "histogram":
+            ax.hist(data.iloc[:,0])
+        elif plot_type == "pie":
+            ax.pie(data.iloc[:,1], labels=data.iloc[:,0])
+        elif plot_type == "heatmap":
+            ax.imshow(data.values, cmap='viridis')
+        elif plot_type == "3d":
+            from mpl_toolkits.mplot3d import Axes3D
+            if not hasattr(ax, 'projection') or ax.projection != '3d':
+                self.figure.delaxes(ax)
+                ax = self.figure.add_subplot(ax.get_geometry(), projection='3d')
+                self.subplots[subplot_id]['ax'] = ax
+            ax.plot_trisurf(data.iloc[:,0], data.iloc[:,1], data.iloc[:,2])
+            
+        self.update_plot()
+
+    def show_import_dialog(self):
+        """Show file dialog for importing data"""
+        file_path = filedialog.askopenfilename(
+            title="Select Data File",
+            filetypes=[("CSV Files", "*.csv"), ("Excel Files", "*.xlsx"), ("All Files", "*.*")]
+        )
+        if file_path:
+            self.import_data(file_path)
+
+    def import_data(self, file_path):
+        """Import data from file and plot it"""
+        try:
+            if file_path.endswith('.csv'):
+                data = pd.read_csv(file_path)
+            elif file_path.endswith(('.xls', '.xlsx')):
+                data = pd.read_excel(file_path)
+            else:
+                messagebox.showerror("Error", "Unsupported file format")
+                return
+            
+            # Clear existing points
+            self.points = np.empty((0, 2))
+            
+            # Convert to points array (assuming first two columns are x,y)
+            if len(data.columns) >= 2:
+                self.points = data.iloc[:, :2].values
+                self.update_kdtree()
+                self.update_plot()
+                messagebox.showinfo("Success", f"Imported {len(self.points)} data points")
+            else:
+                messagebox.showerror("Error", "Data file must have at least 2 columns")
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to import data: {str(e)}")
+
+    def show_export_dialog(self):
+        """Show dialog for exporting plot"""
+        file_path = filedialog.asksaveasfilename(
+            title="Save Plot As",
+            defaultextension=".png",
+            filetypes=[("PNG", "*.png"), ("PDF", "*.pdf"), ("All Files", "*.*")]
+        )
+        if file_path:
+            self.export_plot(file_path)
+
+    def export_plot(self, file_path):
+        """Export current plot to file"""
+        try:
+            if file_path.endswith('.png'):
+                self.figure.savefig(file_path, dpi=300, bbox_inches='tight')
+            elif file_path.endswith('.pdf'):
+                self.figure.savefig(file_path, bbox_inches='tight')
+            messagebox.showinfo("Success", f"Plot saved to {file_path}")
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to export plot: {str(e)}")
+
+    def apply_filter(self):
+        """Apply selected filter to the data"""
+        filter_type = self.filter_combo.get()
+        if filter_type == "None":
+            # Reset to original points
+            if hasattr(self, 'original_points'):
+                self.points = self.original_points.copy()
+        elif filter_type == "Numeric Range":
+            # Store original points before filtering
+            if not hasattr(self, 'original_points'):
+                self.original_points = self.points.copy()
+            
+            # Simple range filter (can be enhanced with a dialog)
+            x_min, x_max = np.min(self.points[:,0]), np.max(self.points[:,0])
+            y_min, y_max = np.min(self.points[:,1]), np.max(self.points[:,1])
+            
+            # Filter points within middle 50% range
+            x_range = x_max - x_min
+            y_range = y_max - y_min
+            mask = (self.points[:,0] > x_min + 0.25*x_range) & \
+                   (self.points[:,0] < x_min + 0.75*x_range) & \
+                   (self.points[:,1] > y_min + 0.25*y_range) & \
+                   (self.points[:,1] < y_min + 0.75*y_range)
+            self.points = self.original_points[mask]
+        elif filter_type == "Outliers":
+            # Store original points before filtering
+            if not hasattr(self, 'original_points'):
+                self.original_points = self.points.copy()
+                
+            # Simple outlier removal using IQR
+            q1 = np.percentile(self.points[:,1], 25)
+            q3 = np.percentile(self.points[:,1], 75)
+            iqr = q3 - q1
+            lower_bound = q1 - 1.5*iqr
+            upper_bound = q3 + 1.5*iqr
+            
+            mask = (self.points[:,1] >= lower_bound) & (self.points[:,1] <= upper_bound)
+            self.points = self.original_points[mask]
+        
+        self.update_kdtree()
+        self.update_plot()
+
+    def create_plot_tab(self):
+        """Interactive Plot Tab with dynamic editing features."""
+        tab = ttk.Frame(self.notebook)
+        self.notebook.add(tab, text="   Interactive Plot   ")
+
+        # Create a matplotlib figure for interactive plotting
+        self.figure = Figure(figsize=(5, 3), dpi=100)
+        self.ax = self.figure.add_subplot(111)
+        self.ax.set_title("Advanced Plot")
+        self.ax.set_xlabel("X-axis")
+        self.ax.set_ylabel("Y-axis")
+
+        # Embed the figure in the GUI
+        self.canvas = FigureCanvasTkAgg(self.figure, tab)
+        self.canvas_widget = self.canvas.get_tk_widget()
+        self.canvas_widget.pack(fill="both", expand=True)
+
+        # Initial plot
+        self.update_plot()
+
+        # Add properties controls
+        self.create_properties_controls(tab)
 
         # Connect canvas events for interactivity
-        self.canvas.mpl_connect('button_press_event', self.on_press)  # Handle click/press events
-        self.canvas.mpl_connect('button_release_event', self.on_release)  # Handle release events
-        self.canvas.mpl_connect('motion_notify_event', self.on_mouse_move)  # Handle point dragging
-        self.canvas.mpl_connect('motion_notify_event', self.on_motion)  # Handle panning
-        self.canvas.mpl_connect('scroll_event', self.on_mouse_scroll)  # Handle scrolling/zooming
-        self.canvas.mpl_connect('button_press_event', self.on_double_click)  # Handle double-click
+        self.canvas.mpl_connect('button_press_event', self.on_press)
+        self.canvas.mpl_connect('button_release_event', self.on_release)
+        self.canvas.mpl_connect('motion_notify_event', self.on_mouse_move)
+        self.canvas.mpl_connect('motion_notify_event', self.on_motion)
+        self.canvas.mpl_connect('scroll_event', self.on_mouse_scroll)
+        self.canvas.mpl_connect('button_press_event', self.on_double_click)
 
         # Initialize for panning
         self.prev_x, self.prev_y = None, None
 
-    def zoom(self, zoom_in=True):
-        """Zoom in or out on the plot"""
-        factor = 0.9 if zoom_in else 1.1
-
-        # Get current axis limits
-        x_min, x_max = self.ax.get_xlim()
-        y_min, y_max = self.ax.get_ylim()
-
-        # Calculate center
-        x_center = (x_min + x_max) / 2
-        y_center = (y_min + y_max) / 2
-
-        # Calculate new limits centered on current view
-        x_min_new = x_center - (x_center - x_min) * factor
-        x_max_new = x_center + (x_max - x_center) * factor
-        y_min_new = y_center - (y_center - y_min) * factor
-        y_max_new = y_center + (y_max - y_center) * factor
-
-        # Set new limits
-        self.ax.set_xlim(x_min_new, x_max_new)
-        self.ax.set_ylim(y_min_new, y_max_new)
-
-        # Redraw canvas
-        self.canvas.draw_idle()
-
-    def reset_zoom(self):
-        """Reset zoom to original view"""
-        self.ax.set_xlim(self.original_xlim)
-        self.ax.set_ylim(self.original_ylim)
-        self.canvas.draw_idle()
-
-    def reset_plot(self):
-        """Reset the plot to its initial state"""
-        # Save current state for undo
-        self.save_state()
-
-        # Reset points to initial state
-        self.points = self.initial_points.copy()
-        self.update_kdtree()
-
-        # Reset styles to defaults
-        self.line_color = self.initial_line_color
-        self.line_style = self.initial_line_style
-        self.marker_size = self.initial_marker_size
-
-        # Reset custom labels
-        self.custom_labels = {}
-
-        # Update UI elements
-        self.line_color_combo.set(self.line_color)
-        self.line_style_combo.set(self.line_style)
-        self.marker_size_slider.set(self.marker_size)
-
-        # Reset axes to original view
-        self.reset_zoom()
-
-        # Update plot
-        self.update_plot()
-
+    def add_subplot(self):
+        """Add new synchronized subplot"""
+        subplot_id = f"subplot_{len(self.subplots) + 1}"
+        
+        # Create edit tab
+        edit_tab = ttk.Frame(self.notebook)
+        self.notebook.add(edit_tab, text=f"Edit {len(self.subplots) + 1}")
+        
+        # Create figure and canvas for edit view
+        fig = Figure(figsize=(5, 3), dpi=100)
+        ax = fig.add_subplot(111)
+        canvas = FigureCanvasTkAgg(fig, edit_tab)
+        canvas.get_tk_widget().pack(fill='both', expand=True)
+        
+        # Initialize subplot state with points
+        self.subplot_states[subplot_id] = {
+            'points': self.points.copy(),  # Initialize with current points
+            'title': f"Subplot {len(self.subplots) + 1}",
+            'xlabel': "X-axis",
+            'ylabel': "Y-axis",
+            'line_color': 'blue',
+            'line_style': '-',
+            'marker_size': 8
+        }
+        
+        # Store references with proper structure
+        self.subplots[subplot_id] = {
+            'fig': fig,
+            'ax': ax,
+            'canvas': canvas,
+            'tab': edit_tab,
+            'points': self.points.copy()  # Also store points in subplot dict
+        }
+        
+        # Add controls to edit tab
+        self.create_properties_controls(edit_tab, subplot_id)
+        
+        # Update main view
+        self.update_main_view()
+        
+        # Set as active
+        self.set_active_subplot(subplot_id)
+        
+    def update_main_view(self):
+        """Synchronize all subplots with main view"""
+        if not hasattr(self, 'figure'):
+            return
+            
+        self.figure.clear()
+        
+        # Recreate main plot with all subplots
+        cols = min(3, len(self.subplots) + 1)
+        rows = (len(self.subplots) + cols) // cols
+        
+        # Main plot
+        self.ax = self.figure.add_subplot(rows, cols, 1)
+        self.plot_points()
+        
+        # Subplots
+        for i, (subplot_id, subplot) in enumerate(self.subplots.items(), start=2):
+            ax = self.figure.add_subplot(rows, cols, i)
+            state = self.subplot_states[subplot_id]
+            
+            # Plot points with subplot's style
+            if len(state['points']) > 0:
+                ax.plot(state['points'][:,0], state['points'][:,1],
+                       color=state['line_color'],
+                       linestyle=state['line_style'],
+                       marker='o',
+                       markersize=state['marker_size'])
+            
+            # Apply subplot's labels
+            ax.set_title(state['title'])
+            ax.set_xlabel(state['xlabel'])
+            ax.set_ylabel(state['ylabel'])
+        
+        self.canvas.draw()
+        
     def toggle_grid(self):
         """Toggle gridlines on/off"""
         self.ax.grid(self.grid_toggle_var.get())
@@ -986,252 +1670,146 @@ class InteractivePlot:
         if not preview:
             self.legend_popup.destroy()
 
-    def add_point(self):
-        """Add a new point to the plot"""
-        # Save current state for undo
-        self.save_state()
+    def add_subplot(self):
+        """Add new synchronized subplot"""
+        subplot_id = f"subplot_{len(self.subplots) + 1}"
+        
+        # Create edit tab
+        edit_tab = ttk.Frame(self.notebook)
+        self.notebook.add(edit_tab, text=f"Edit {len(self.subplots) + 1}")
+        
+        # Create figure and canvas for edit view
+        fig = Figure(figsize=(5, 3), dpi=100)
+        ax = fig.add_subplot(111)
+        canvas = FigureCanvasTkAgg(fig, edit_tab)
+        canvas.get_tk_widget().pack(fill='both', expand=True)
+        
+        # Initialize subplot state
+        self.subplot_states[subplot_id] = {
+            'points': self.points.copy(),
+            'title': f"Subplot {len(self.subplots) + 1}",
+            'xlabel': "X-axis",
+            'ylabel': "Y-axis",
+            'line_color': 'blue',
+            'line_style': '-',
+            'marker_size': 8
+        }
+        
+        # Store references
+        self.subplots[subplot_id] = {
+            'fig': fig,
+            'ax': ax,
+            'canvas': canvas,
+            'tab': edit_tab,
+            'points': self.points.copy()
+        }
+        
+        # Add controls to edit tab
+        self.create_properties_controls(edit_tab, subplot_id)
+        
+        # Update main view
+        self.update_main_view()
+        
+        # Set as active
+        self.set_active_subplot(subplot_id)
+        
+    def update_main_view(self):
+        """Synchronize all subplots with main view"""
+        if not hasattr(self, 'figure'):
+            return
+            
+        self.figure.clear()
+        
+        # Recreate main plot with all subplots
+        cols = min(3, len(self.subplots) + 1)
+        rows = (len(self.subplots) + cols) // cols
+        
+        # Main plot
+        self.ax = self.figure.add_subplot(rows, cols, 1)
+        self.plot_points()
+        
+        # Subplots
+        for i, (subplot_id, subplot) in enumerate(self.subplots.items(), start=2):
+            ax = self.figure.add_subplot(rows, cols, i)
+            state = self.subplot_states[subplot_id]
+            
+            # Plot points with subplot's style
+            if len(state['points']) > 0:
+                ax.plot(state['points'][:,0], state['points'][:,1],
+                       color=state['line_color'],
+                       linestyle=state['line_style'],
+                       marker='o',
+                       markersize=state['marker_size'])
+            
+            # Apply subplot's labels
+            ax.set_title(state['title'])
+            ax.set_xlabel(state['xlabel'])
+            ax.set_ylabel(state['ylabel'])
+        
+        self.canvas.draw()
+        
+    def zoom(self, zoom_in=True):
+        """Zoom in or out on the plot"""
+        factor = 0.9 if zoom_in else 1.1
 
         # Get current axis limits
         x_min, x_max = self.ax.get_xlim()
         y_min, y_max = self.ax.get_ylim()
 
-        # Create a new point at a random position within visible area
-        new_x = np.random.uniform(x_min, x_max)
-        new_y = np.random.uniform(y_min, y_max)
+        # Calculate center
+        x_center = (x_min + x_max) / 2
+        y_center = (y_min + y_max) / 2
 
-        # Add new point and update
-        if len(self.points) == 0:
-            self.points = np.array([[new_x, new_y]])
-        else:
-            self.points = np.vstack([self.points, [new_x, new_y]])
+        # Calculate new limits centered on current view
+        x_min_new = x_center - (x_center - x_min) * factor
+        x_max_new = x_center + (x_max - x_center) * factor
+        y_min_new = y_center - (y_center - y_min) * factor
+        y_max_new = y_center + (y_max - y_center) * factor
 
-        self.update_kdtree()
-        self.update_plot()
+        # Set new limits
+        self.ax.set_xlim(x_min_new, x_max_new)
+        self.ax.set_ylim(y_min_new, y_max_new)
 
-    def save_state(self):
-        """Save current state for undo functionality"""
-        # Deep copy custom labels to ensure we store a complete snapshot
-        custom_labels_copy = {}
-        if hasattr(self, 'custom_labels'):
-            for key, value in self.custom_labels.items():
-                custom_labels_copy[key] = value.copy()
-
-        state = {
-            'points': self.points.copy(),
-            'line_color': self.line_color,
-            'line_style': self.line_style,
-            'marker_size': self.marker_size,
-            'custom_labels': custom_labels_copy
-        }
-        self.history.append(state)
-        # Clear redo stack after a new action
-        self.redo_stack = []
-
-    def undo(self):
-        """Undo the last action"""
-        if len(self.history) > 0:
-            # Deep copy custom labels for current state
-            custom_labels_copy = {}
-            if hasattr(self, 'custom_labels'):
-                for key, value in self.custom_labels.items():
-                    custom_labels_copy[key] = value.copy()
-
-            # Save current state to redo stack
-            current_state = {
-                'points': self.points.copy(),
-                'line_color': self.line_color,
-                'line_style': self.line_style,
-                'marker_size': self.marker_size,
-                'custom_labels': custom_labels_copy
-            }
-            self.redo_stack.append(current_state)
-
-            # Restore previous state
-            previous_state = self.history.pop()
-            self.points = previous_state['points'].copy()
-            self.line_color = previous_state['line_color']
-            self.line_style = previous_state['line_style']
-            self.marker_size = previous_state['marker_size']
-
-            # Restore custom labels if they exist in the saved state
-            if 'custom_labels' in previous_state:
-                self.custom_labels = previous_state['custom_labels']
-
-            # Update UI
-            self.line_color_combo.set(self.line_color)
-            self.line_style_combo.set(self.line_style)
-            self.marker_size_slider.set(self.marker_size)
-
-            # Update KDTree and plot
-            self.update_kdtree()
-            self.update_plot()
-
-    def redo(self):
-        """Redo the last undone action"""
-        if len(self.redo_stack) > 0:
-            # Deep copy custom labels for current state
-            custom_labels_copy = {}
-            if hasattr(self, 'custom_labels'):
-                for key, value in self.custom_labels.items():
-                    custom_labels_copy[key] = value.copy()
-
-            # Save current state to history
-            current_state = {
-                'points': self.points.copy(),
-                'line_color': self.line_color,
-                'line_style': self.line_style,
-                'marker_size': self.marker_size,
-                'custom_labels': custom_labels_copy
-            }
-            self.history.append(current_state)
-
-            # Restore next state
-            next_state = self.redo_stack.pop()
-            self.points = next_state['points'].copy()
-            self.line_color = next_state['line_color']
-            self.line_style = next_state['line_style']
-            self.marker_size = next_state['marker_size']
-
-            # Restore custom labels if they exist in the saved state
-            if 'custom_labels' in next_state:
-                self.custom_labels = next_state['custom_labels']
-
-            # Update UI
-            self.line_color_combo.set(self.line_color)
-            self.line_style_combo.set(self.line_style)
-            self.marker_size_slider.set(self.marker_size)
-
-            # Update KDTree and plot
-            self.update_kdtree()
-            self.update_plot()
-
-    def update_plot(self):
-        """Update the entire plot with current settings"""
-        # Just call plot_points which now handles everything needed for a proper update
-        # This prevents duplicate code and ensures consistent behavior
-        self.plot_points()
-
-    def plot_points(self):
-        """Plot points and connecting lines with current styles"""
-        if len(self.points) == 0:
-            return
-
-        # Store current limits and labels
-        xlim = self.ax.get_xlim()
-        ylim = self.ax.get_ylim()
-
-        # Store current label properties before clearing
-        title_text = self.ax.get_title() or "Advanced Plot"
-        xlabel_text = self.ax.get_xlabel() or "X-axis"
-        ylabel_text = self.ax.get_ylabel() or "Y-axis"
-
-        # Store custom label properties if they exist
-        custom_title_props = {}
-        custom_xlabel_props = {}
-        custom_ylabel_props = {}
-
-        # Check if we have saved custom label settings
-        if hasattr(self, 'custom_labels'):
-            if 'title' in self.custom_labels:
-                custom_title_props = self.custom_labels['title']
-                title_text = custom_title_props.get('text', title_text)
-            if 'xlabel' in self.custom_labels:
-                custom_xlabel_props = self.custom_labels['xlabel']
-                xlabel_text = custom_xlabel_props.get('text', xlabel_text)
-            if 'ylabel' in self.custom_labels:
-                custom_ylabel_props = self.custom_labels['ylabel']
-                ylabel_text = custom_ylabel_props.get('text', ylabel_text)
-
-        # Clear current plot
-        self.ax.clear()
-
-        # Re-apply labels with custom settings if available
-        if custom_title_props:
-            self.ax.set_title(title_text, 
-                             fontsize=custom_title_props.get('fontsize', 12),
-                             color=custom_title_props.get('color', 'black'),
-                             fontweight=custom_title_props.get('fontweight', 'normal'),
-                             fontstyle=custom_title_props.get('fontstyle', 'normal'))
-        else:
-            self.ax.set_title(title_text)
-
-        if custom_xlabel_props:
-            self.ax.set_xlabel(xlabel_text,
-                              fontsize=custom_xlabel_props.get('fontsize', 10),
-                              color=custom_xlabel_props.get('color', 'black'),
-                              fontweight=custom_xlabel_props.get('fontweight', 'normal'),
-                              fontstyle=custom_xlabel_props.get('fontstyle', 'normal'))
-        else:
-            self.ax.set_xlabel(xlabel_text)
-
-        if custom_ylabel_props:
-            self.ax.set_ylabel(ylabel_text,
-                              fontsize=custom_ylabel_props.get('fontsize', 10),
-                              color=custom_ylabel_props.get('color', 'black'),
-                              fontweight=custom_ylabel_props.get('fontweight', 'normal'),
-                              fontstyle=custom_ylabel_props.get('fontstyle', 'normal'))
-        else:
-            self.ax.set_ylabel(ylabel_text)
-
-        # Extract x and y coordinates
-        x = self.points[:, 0]
-        y = self.points[:, 1]
-
-        # Plot line and points
-        self.ax.plot(x, y, linestyle=self.line_style, color=self.line_color, marker='o', 
-                     markersize=self.marker_size/2, markerfacecolor=self.line_color)
-
-        # Highlight dragging point if any
-        if self.dragging_idx is not None and self.dragging_idx < len(self.points):
-            self.ax.plot(self.points[self.dragging_idx, 0], self.points[self.dragging_idx, 1], 
-                        'o', markersize=self.marker_size/1.5, markerfacecolor='yellow', 
-                        markeredgecolor='red', markeredgewidth=2)
-
-        # Restore all annotations
-        for idx, ann in list(self.annotations.items()):
-            if idx < len(self.points):  # Make sure the point still exists
-                x, y = self.points[idx]
-                new_ann = self.ax.annotate(
-                    f"({x:.2f}, {y:.2f})",  # Auto-update coordinates
-                    xy=(x, y),  # Position with the point
-                    xytext=(10, 10),
-                    textcoords="offset points",
-                    fontsize=9, 
-                    color='black',
-                    bbox=dict(boxstyle="round", fc="yellow", alpha=0.7),
-                    arrowprops=dict(arrowstyle="->"),
-                    zorder=1000  # Ensure on top
-                )
-                # Update our dictionary with the new annotation
-                self.annotations[idx] = new_ann
-            else:
-                # If point was deleted, remove the annotation
-                del self.annotations[idx]
-
-        # Apply grid if enabled
-        self.ax.grid(self.grid_toggle_var.get())
-
-        # Apply legend if enabled
-        if self.legend_toggle_var.get():
-            if hasattr(self, 'legend_labels'):
-                if hasattr(self, 'legend_position'):
-                    self.ax.legend(self.legend_labels, loc=self.legend_position)
-                else:
-                    self.ax.legend(self.legend_labels)
-            else:
-                self.ax.legend([f"Data {i+1}" for i in range(1)])  # Only one line
-
-        # Restore original view limits
-        self.ax.set_xlim(xlim)
-        self.ax.set_ylim(ylim)
-
-        # Draw only what's needed without changing axis limits
+        # Redraw canvas
         self.canvas.draw_idle()
 
+    def reset_zoom(self):
+        """Reset zoom to original view"""
+        if hasattr(self, 'original_xlim') and hasattr(self, 'original_ylim'):
+            self.ax.set_xlim(self.original_xlim)
+            self.ax.set_ylim(self.original_ylim)
+            self.canvas.draw_idle()
 
-# Example usage:
+    def reset_plot(self):
+        """Reset the plot to its initial state"""
+        # Save current state for undo
+        self.save_state()
+
+        # Reset points to initial state
+        self.points = self.initial_points.copy()
+        self.update_kdtree()
+
+        # Reset styles to defaults
+        self.line_color = self.initial_line_color
+        self.line_style = self.initial_line_style
+        self.marker_size = self.initial_marker_size
+
+        # Reset custom labels
+        self.custom_labels = {}
+
+        # Update UI elements
+        self.line_color_combo.set(self.line_color)
+        self.line_style_combo.set(self.line_style)
+        self.marker_size_slider.set(self.marker_size)
+
+        # Reset axes to original view
+        self.reset_zoom()
+
+        # Update plot
+        self.update_plot()
+
+# Update main block
 if __name__ == "__main__":
-    root = tk.Tk()
-    app = InteractivePlot(root)
-    root.geometry("800x600")
-    root.mainloop()
+    app = InteractivePlot()
+    app.root.geometry("800x600")
+    app.root.mainloop()

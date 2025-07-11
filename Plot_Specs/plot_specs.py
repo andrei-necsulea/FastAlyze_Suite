@@ -6,6 +6,7 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import pandas as pd
 import numpy as np
 import os
+from interactive_plot import InteractivePlot
 
 class ComplexPlotApp:
     def __init__(self, root):
@@ -13,6 +14,15 @@ class ComplexPlotApp:
         self.root.title("Advanced Data Plot GUI")
         self.root.geometry("1400x900")
 
+        # Create main notebook
+        self.notebook = ttk.Notebook(root, padding=[20,10])
+        self.notebook.pack(fill="both", expand=True)
+
+        # Add InteractivePlot as a tab
+        self.interactive_tab = InteractivePlot(self.notebook)
+        self.notebook.add(self.interactive_tab.frame, text="Interactive Plot")
+
+        # Existing properties
         self.current_line_style = "-"  # Default line style
         self.current_line_color = "blue"  # Default line color
         self.current_marker_style = "o"  # Default marker style
@@ -34,9 +44,8 @@ class ComplexPlotApp:
         self.annotations = []
 
         # Main Notebook for Tabbed Navigation
-        self.notebook = ttk.Notebook(root , padding=[20,10])
-        self.notebook.pack(fill="both", expand=True)
-
+        # self.notebook = ttk.Notebook(root , padding=[20,10])
+        # self.notebook.pack(fill="both", expand=True)
 
         # Tabs
         self.create_plot_tab()
@@ -45,12 +54,67 @@ class ComplexPlotApp:
         self.create_subplot_properties_tab()
         self.create_data_management_tab()
         self.create_transformation_tab()
-        self.create_export_tab()
         self.create_database_tab()
         self.create_theme_tab()
         
-          # Add this here
+        # Initialize for panning
+        self.prev_x, self.prev_y = None, None
+        
+        # Live update task ID
+        self.live_update_task_id = None
+        
+        # Store original limits for reset function
+        self.original_xlim = None
+        self.original_ylim = None
+        
+        # Custom labels storage
+        self.custom_labels = {}
+        
+        # Legend settings
+        self.legend_labels = []
+        self.legend_position = "best"
 
+        # Create a matplotlib figure for interactive plotting
+        self.figure = Figure(figsize=(5, 3), dpi=100)
+        self.ax = self.figure.add_subplot(111)
+        self.ax.set_title("Advanced Plot")
+        self.ax.set_xlabel("X-axis")
+        self.ax.set_ylabel("Y-axis")
+
+        # Embed the figure in the GUI (Initialize canvas before update_plot)
+        self.canvas = FigureCanvasTkAgg(self.figure, self.notebook.nametowidget(self.notebook.tabs()[0]))
+        self.canvas_widget = self.canvas.get_tk_widget()
+        self.canvas_widget.pack(fill="both", expand=True)
+
+        # Initialize tooltips and right-click menu
+        self.enable_tooltip_deletion()
+
+        # Initial Plot
+        self.update_plot()
+
+        # Controls Frame for buttons
+        controls_frame = ttk.Frame(self.notebook.nametowidget(self.notebook.tabs()[0]))
+        controls_frame.pack(side="bottom", fill="x", pady=5)
+
+        # Add buttons for interactivity
+        ttk.Button(controls_frame, text="Zoom In", command=self.zoom_in).pack(side="left", padx=5)
+        ttk.Button(controls_frame, text="Zoom Out", command=self.zoom_out).pack(side="left", padx=5)
+        ttk.Button(controls_frame, text="Reset View", command=self.reset_view).pack(side="left", padx=5)
+        ttk.Button(controls_frame, text="Add Point", command=self.add_point).pack(side="left", padx=5)
+        ttk.Button(controls_frame, text="Remove Last Point", command=self.remove_point).pack(side="left", padx=5)
+        ttk.Button(controls_frame, text="Edit Point", command=self.edit_point).pack(side="left", padx=5)
+
+        # Connect canvas events for interactive editing
+        self.canvas.mpl_connect("button_press_event", self.on_click)
+        self.canvas.mpl_connect("motion_notify_event", self.on_hover)
+        self.canvas.mpl_connect("button_release_event", self.on_release)
+
+        self.selected_point = None  # For dragging points
+
+        self.tooltip = None
+        self.canvas.mpl_connect("motion_notify_event", self.show_tooltip)
+        self.canvas.mpl_connect("button_press_event", self.on_double_click)
+        self.canvas.mpl_connect("button_press_event", self.handle_mouse_events)
 
     def apply_global_background(self):
       """Apply a global background color to all subplots."""
@@ -66,7 +130,6 @@ class ComplexPlotApp:
 
       # Redraw the canvas to reflect the background changes
       self.canvas.draw()
-
 
     def apply_subplot_properties(self):
       """Apply properties to the selected subplot."""
@@ -103,8 +166,6 @@ class ComplexPlotApp:
       # Redraw the canvas to reflect changes
       self.canvas.draw()
 
-
-
     def load_subplot_settings(self, event=None):
       """Load settings for the selected subplot."""
       if not self.subplot_selector.get():
@@ -124,7 +185,6 @@ class ComplexPlotApp:
       self.x_axis_entry.insert(0, ax.get_xlabel())
       self.y_axis_entry.delete(0, tk.END)
       self.y_axis_entry.insert(0, ax.get_ylabel())
-
 
     def add_subplot(self):
       """Add a new subplot dynamically."""
@@ -164,7 +224,6 @@ class ComplexPlotApp:
     
       # Redraw the plot
       self.canvas.draw()
-
 
     def create_subplot_properties_tab(self):
        """Dynamic Subplot Management and Properties Tab."""
@@ -885,4 +944,3 @@ class ComplexPlotApp:
 root = tk.Tk()
 complex_app = ComplexPlotApp(root)
 root.mainloop()
-
